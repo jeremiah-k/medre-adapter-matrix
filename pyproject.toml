@@ -1,0 +1,21 @@
+[project]
+name = "medre-adapter-matrix"
+version = "0.1.0"
+description = "matrix transport adapter for MEDRE"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+dependencies = ["medre>=0.1.0", 'mindroom-nio==0.40.0']
+
+[project.optional-dependencies]
+e2e = ["mindroom-nio[e2e]==0.40.0"]
+
+[project.entry-points."medre.adapters"]
+matrix = "medre.adapters.matrix.plugin:adapter_spec"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = true
