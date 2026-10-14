@@ -5,6 +5,7 @@ from medre.adapter_registry import AdapterSpec, DestinationSpec, SymbolRef
 
 def adapter_spec() -> AdapterSpec:
     return AdapterSpec(
+        sample_config=SymbolRef("medre.adapters.matrix.sample", "sample_config"),
         destinations=(
             DestinationSpec(
                 "matrix_room",
@@ -13,6 +14,7 @@ def adapter_spec() -> AdapterSpec:
                 ),
             ),
         ),
+        logger_levels=(("nio.crypto.log", "ERROR"), ("peewee", "WARNING")),
         transport="matrix",
         config=SymbolRef("medre.config.adapters.matrix", "MatrixConfig"),
         runtime_config=SymbolRef(

@@ -20,7 +20,9 @@ async def test_session_stop_closes_real_crypto_database(tmp_path: Path) -> None:
     crypto = pytest.importorskip("nio.crypto")
     if not crypto.ENCRYPTION_ENABLED:
         pytest.skip("Matrix E2EE extra is required")
-    assert_installed_extra_matches_declared_pins("matrix-e2e", ("mindroom-nio",))
+    assert_installed_extra_matches_declared_pins(
+        "matrix", ("mindroom-nio",), sdk_extra="e2e"
+    )
     config = make_matrix_config()
     client = nio.AsyncClient(
         config.homeserver,
@@ -80,7 +82,9 @@ async def test_cancelled_stop_retry_retains_store_until_recovery_drains(
     crypto = pytest.importorskip("nio.crypto")
     if not crypto.ENCRYPTION_ENABLED:
         pytest.skip("Matrix E2EE extra is required")
-    assert_installed_extra_matches_declared_pins("matrix-e2e", ("mindroom-nio",))
+    assert_installed_extra_matches_declared_pins(
+        "matrix", ("mindroom-nio",), sdk_extra="e2e"
+    )
     config = make_matrix_config()
     client = nio.AsyncClient(
         config.homeserver,
