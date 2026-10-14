@@ -58,3 +58,38 @@ jobs:
       - name: Run native SDK contracts
         if: matrix.mode == 'sdk'
         run: .core/.venv/bin/python -m pytest -v -m "matrix_sdk and not local_integration and not soak and not live and not hardware and not docker"
+
+  windows-e2ee-contract:
+    name: Windows Matrix E2EE SDK (py3.13)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jeremiah-k/medre
+          ref: ${{ inputs.core_ref || vars.MEDRE_CORE_REF || 'main' }}
+          path: .core
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version-file: .core/.tool-versions
+          python-version: "3.13"
+          enable-cache: true
+      - name: Install pinned core and Matrix with native encryption
+        run: |
+          uv sync --project .core --locked --extra dev
+          uv pip install --python .core/.venv/Scripts/python.exe -e ".[test,e2e]"
+      - name: Prove installed cryptography is enabled, not merely importable
+        run: |
+          .core/.venv/Scripts/python.exe -c "from nio.crypto import ENCRYPTION_ENABLED; assert ENCRYPTION_ENABLED, 'mindroom-nio E2EE is disabled on Windows'"
+      - name: Validate real cross-signing and crypto-store contracts without a homeserver
+        run: |
+          .core/.venv/Scripts/python.exe -m pytest -q -o addopts= tests/test_matrix_cross_signing_sdk_contract.py tests/test_matrix_store_lifecycle_sdk.py tests/test_matrix_decrypted_event_sdk_contract.py
