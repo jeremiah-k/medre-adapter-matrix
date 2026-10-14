@@ -1,13 +1,23 @@
 """Declarative registration for the separately distributed adapter."""
 
-from medre.adapter_registry import AdapterSpec, SymbolRef
+from medre.adapter_registry import AdapterSpec, DestinationSpec, SymbolRef
 
 
 def adapter_spec() -> AdapterSpec:
     return AdapterSpec(
+        destinations=(
+            DestinationSpec(
+                "matrix_room",
+                SymbolRef(
+                    "medre.config.adapters.matrix_destinations", "validate_destination"
+                ),
+            ),
+        ),
         transport="matrix",
         config=SymbolRef("medre.config.adapters.matrix", "MatrixConfig"),
-        runtime_config=SymbolRef("medre.config.model", "MatrixRuntimeConfig"),
+        runtime_config=SymbolRef(
+            "medre.config.adapters.matrix_runtime", "MatrixRuntimeConfig"
+        ),
         adapter=SymbolRef("medre.adapters.matrix.adapter", "MatrixAdapter"),
         fake_adapter=SymbolRef("medre.adapters.fakes.matrix", "FakeMatrixAdapter"),
         renderer_factory=SymbolRef(

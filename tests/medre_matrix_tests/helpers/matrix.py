@@ -1,0 +1,254 @@
+"""Matrix test helpers.
+
+Provides duck-typed nio event/room builders, a mock nio module factory,
+a ``mock_nio`` pytest fixture, and a MatrixConfig factory.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import sys
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from medre.adapters.matrix.outbound import (
+    MATRIX_OPERATION_KEY,
+    MatrixOutboundOperation,
+)
+from medre.config.adapters.matrix import MatrixConfig
+from medre.core.rendering.renderer import RenderingResult
+
+
+def matrix_payload_content(result: RenderingResult) -> dict[str, object]:
+    """Return wire content from a closed Matrix ``send_event`` result.
+
+    Test assertions should inspect this content rather than reaching through
+    ``_matrix_operation`` independently.  The helper deliberately asserts the
+    closed envelope shape so a malformed renderer result fails at the common
+    seam instead of producing misleading downstream assertion failures.
+    """
+    operation = result.payload.get(MATRIX_OPERATION_KEY)
+    assert isinstance(operation, dict), "missing Matrix outbound operation"
+    assert operation.get("kind") == "send_event"
+    content = operation.get("content")
+    assert isinstance(content, dict), "Matrix send_event content must be a dict"
+    return content
+
+
+def rendered_payload_content(result: RenderingResult) -> dict[str, object]:
+    """Return renderer wire content, unwrapping Matrix send envelopes.
+
+    Cross-renderer conformance tests use this helper when the same assertion
+    surface covers Matrix and non-Matrix renderers. Matrix results are
+    unwrapped through :func:`matrix_payload_content`; other renderer payloads
+    are returned unchanged.
+    """
+    if MATRIX_OPERATION_KEY in result.payload:
+        return matrix_payload_content(result)
+    return result.payload
+
+
+def matrix_send_payload(
+    content: dict[str, object],
+    *,
+    event_type: str = "m.room.message",
+) -> dict[str, object]:
+    """Wrap hand-authored Matrix wire content in the closed send envelope."""
+    return MatrixOutboundOperation.send_event(event_type, content).to_payload()
+
+
+def make_nio_event(
+    sender: str = "@alice:example.com",
+    event_id: str = "$bridge-evt-001",
+    body: str = "hello from matrix",
+    content: dict[str, Any] | None = None,
+) -> SimpleNamespace:
+    """Build a duck-typed nio RoomMessageText event."""
+    final_content = content or {"msgtype": "m.text", "body": body}
+    return SimpleNamespace(
+        sender=sender,
+        event_id=event_id,
+        body=body,
+        source={
+            "content": final_content,
+            "event_id": event_id,
+            "sender": sender,
+            "type": "m.room.message",
+        },
+    )
+
+
+def make_nio_room(room_id: str = "!bridge_room:example.com") -> SimpleNamespace:
+    """Build a duck-typed nio Room object."""
+    return SimpleNamespace(room_id=room_id)
+
+
+def to_event_dict(
+    room: SimpleNamespace,
+    event: SimpleNamespace,
+    *,
+    sender_display_name: str | None = None,
+) -> dict[str, Any]:
+    """Convert a (room, event) pair into the normalized dict expected by
+    ``MatrixAdapter._on_room_message(event_dict)``.
+    """
+    source = getattr(event, "source", {})
+    # Extract msgtype from source content if available
+    content = source.get("content", {}) if isinstance(source, dict) else {}
+    msgtype = content.get("msgtype", "m.text")
+    origin_server_ts = (
+        source.get("origin_server_ts") if isinstance(source, dict) else None
+    )
+    server_timestamp = (
+        int(origin_server_ts)
+        if not isinstance(origin_server_ts, bool)
+        and (
+            isinstance(origin_server_ts, int)
+            or (
+                isinstance(origin_server_ts, float)
+                and math.isfinite(origin_server_ts)
+                and origin_server_ts.is_integer()
+            )
+        )
+        else int(datetime.now(UTC).timestamp() * 1000)
+    )
+    d: dict[str, Any] = {
+        "room_id": room.room_id,
+        "sender": getattr(event, "sender", ""),
+        "body": getattr(event, "body", ""),
+        "event_id": getattr(event, "event_id", ""),
+        "source": source,
+        "msgtype": msgtype,
+        "server_timestamp": server_timestamp,
+    }
+    if sender_display_name is not None:
+        d["sender_display_name"] = sender_display_name
+    return d
+
+
+def build_mock_nio_module() -> MagicMock:
+    """Create a mock nio module suitable for MatrixSession/MatrixAdapter.
+
+    The returned mock exposes ``AsyncClient``, ``ClientConfig``, event types,
+    and an ``nio.events`` submodule with ``MegolmEvent`` and
+    ``RoomEncryptionEvent``.
+    """
+    mock = MagicMock(name="mock_nio")
+    client = MagicMock(name="mock_async_client")
+    client.logged_in = True
+    client.restore_login = MagicMock()
+    client.add_event_callback = MagicMock()
+    response_callbacks: list[Callable[[Any], Awaitable[Any]]] = []
+
+    def _add_response_callback(
+        callback: Callable[[Any], Awaitable[Any]], *_classes: object
+    ) -> None:
+        response_callbacks.append(callback)
+
+    client.add_response_callback = MagicMock(side_effect=_add_response_callback)
+    stop_sync = asyncio.Event()
+    client.stop_sync_forever = MagicMock(side_effect=stop_sync.set)
+    client.close = AsyncMock()
+    client.rooms = {}
+
+    async def _sync_stub(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        await asyncio.sleep(0)
+        return SimpleNamespace(next_batch="mock_batch_token")
+
+    client.sync = _sync_stub
+
+    async def _sync_forever_stub(*args: object, **kwargs: object) -> None:
+        stop_sync.clear()
+        current_kwargs = dict(kwargs)
+        while not stop_sync.is_set():
+            response = await client.sync(*args, **current_kwargs)
+            for callback in tuple(response_callbacks):
+                await callback(response)
+            if getattr(response, "next_batch", None):
+                current_kwargs["since"] = None
+                current_kwargs["full_state"] = None
+            await asyncio.sleep(0)
+
+    client.sync_forever = _sync_forever_stub
+
+    async def _room_send(
+        room_id: str, message_type: str, content: dict, **kwargs: object
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            event_id=f"$sent-{content.get('body', 'msg')[:12]}",
+            transport_response=None,
+        )
+
+    client.room_send = AsyncMock(side_effect=_room_send)
+
+    async def _join(room_id: str) -> MagicMock:
+        join_resp = MagicMock(name="join_response")
+        join_resp.room_id = room_id
+        return join_resp
+
+    client.join = AsyncMock(side_effect=_join)
+
+    whoami_resp = MagicMock(name="whoami_response")
+    whoami_resp.device_id = "BRIDGE_MOCK_DEVICE"
+    client.whoami = AsyncMock(return_value=whoami_resp)
+
+    mock.AsyncClient = MagicMock(return_value=client)
+    mock.ClientConfig = MagicMock(name="ClientConfig")
+    mock.AsyncClientConfig = mock.ClientConfig
+    mock.RoomMessageText = MagicMock(name="RoomMessageText")
+    mock.RoomMessageNotice = MagicMock(name="RoomMessageNotice")
+    mock.RoomMessageEmote = MagicMock(name="RoomMessageEmote")
+    mock.ReactionEvent = MagicMock(name="ReactionEvent")
+    mock.InviteMemberEvent = MagicMock(name="InviteMemberEvent")
+
+    mock_events = MagicMock(name="nio.events")
+    mock_events.MegolmEvent = MagicMock(name="MegolmEvent")
+    mock_events.RoomEncryptionEvent = MagicMock(name="RoomEncryptionEvent")
+    mock_events.InviteMemberEvent = MagicMock(name="InviteMemberEvent")
+    mock.events = mock_events
+
+    return mock
+
+
+@pytest.fixture
+def mock_nio() -> Any:
+    """Inject a mock nio module into ``sys.modules`` and patch ``HAS_NIO``.
+
+    Restores original modules (or removes injected ones) on teardown.
+    """
+    mock = build_mock_nio_module()
+    saved_nio = sys.modules.get("nio")
+    saved_nio_events = sys.modules.get("nio.events")
+    sys.modules["nio"] = mock
+    sys.modules["nio.events"] = mock.events
+    with patch("medre.adapters.matrix.adapter.HAS_NIO", True):
+        yield mock
+    if saved_nio is None:
+        sys.modules.pop("nio", None)
+    else:
+        sys.modules["nio"] = saved_nio
+    if saved_nio_events is None:
+        sys.modules.pop("nio.events", None)
+    else:
+        sys.modules["nio.events"] = saved_nio_events
+
+
+def make_matrix_config(**overrides: Any) -> MatrixConfig:
+    """Build a valid MatrixConfig for bridge tests.
+
+    Accepts keyword overrides merged on top of sensible defaults.
+    """
+    defaults: dict[str, Any] = {
+        "adapter_id": "matrix-bridge",
+        "homeserver": "https://matrix.example.com",
+        "user_id": "@bot:example.com",
+        "access_token": "tok_bridge",
+        "encryption_mode": "plaintext",
+    }
+    defaults.update(overrides)
+    return MatrixConfig(**defaults)

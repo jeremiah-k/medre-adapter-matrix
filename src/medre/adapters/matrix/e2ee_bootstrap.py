@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import medre.adapters.matrix.compat as _compat_mod
-from medre.adapters.matrix.client_lifecycle import close_matrix_client
 from medre.adapters.matrix.auth import MatrixLoginResult
+from medre.adapters.matrix.client_lifecycle import close_matrix_client
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.identity import (
     MatrixCrossSigningDiagnostics,
@@ -66,7 +66,7 @@ async def bootstrap_login_cross_signing(
     if not _compat_mod.HAS_NIO or not _compat_mod.HAS_E2EE:
         raise MatrixConnectionError(
             "Matrix cross-signing setup requires mindroom-nio[e2e]; "
-            "install 'medre[matrix-e2e]'"
+            "install 'medre-adapter-matrix[e2e]'"
         )
     if not login.device_id:
         raise MatrixConnectionError(

@@ -18,8 +18,6 @@ import random
 import time
 from typing import Any, Callable
 
-from msgspec import structs as _msgspec_structs
-
 from medre.adapters.matrix.codec import MatrixCodec
 from medre.adapters.matrix.compat import HAS_NIO
 from medre.adapters.matrix.errors import (
@@ -70,6 +68,7 @@ from medre.core.ingress import (
 )
 from medre.core.ingress.content import AttachmentContentUnavailableError
 from medre.core.rendering.renderer import RenderingResult
+from msgspec import structs as _msgspec_structs
 
 _logger = logging.getLogger(__name__)
 
@@ -389,7 +388,7 @@ class MatrixAdapter(AdapterContract):
             self.ctx = None
             self._start_time = None
             raise MatrixConnectionError(
-                "mindroom-nio not installed; pip install 'medre[matrix]'"
+                "mindroom-nio not installed; pip install 'medre-adapter-matrix'"
             )
 
         # E2EE mode guards are now handled inside MatrixSession.start().
