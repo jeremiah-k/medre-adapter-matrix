@@ -70,6 +70,10 @@ callback injection uses `AdapterContract.publish_inbound(event)`.
 from broken/conflicting entry points. Basic CLI help and unrelated healthy
 providers remain available when another provider fails discovery.
 
+Matrix configures the core-owned `medre adapter matrix` parser. Optional CLI
+registration failures are reported as `broken CLI contribution` without
+disabling generic help, preflight, healthy commands, or runtime discovery.
+
 ## Tests
 
 Protocol and SDK contract tests live in this repository with adapter-owned

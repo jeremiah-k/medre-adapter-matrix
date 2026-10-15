@@ -17,7 +17,7 @@ from medre.adapters.matrix.auth import MatrixLoginResult
 from medre.adapters.matrix.e2ee_bootstrap import bootstrap_login_cross_signing
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.identity import MatrixCrossSigningDiagnostics
-from medre.cli.contrib import register_builtin_contributors
+from medre.cli.contrib import register_adapter_contributors
 
 
 def _login_result() -> MatrixLoginResult:
@@ -32,7 +32,7 @@ def _login_result() -> MatrixLoginResult:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    register_builtin_contributors(subparsers)
+    register_adapter_contributors(subparsers)
     return parser
 
 

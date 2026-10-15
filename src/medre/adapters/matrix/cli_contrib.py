@@ -14,13 +14,10 @@ from typing import Any
 __all__ = ["dispatch_matrix_cli", "register_matrix_cli"]
 
 
-def register_matrix_cli(adapter_subparsers: Any) -> None:
-    """Register ``medre adapter matrix ...`` below the adapter namespace."""
-    adapter_matrix_p = adapter_subparsers.add_parser(
-        "matrix",
-        help="Matrix transport adapter commands",
-    )
-    adapter_matrix_sub = adapter_matrix_p.add_subparsers(
+def register_matrix_cli(parser: argparse.ArgumentParser) -> None:
+    """Configure the core-owned ``medre adapter matrix`` parser."""
+    parser.description = "Matrix transport adapter commands"
+    adapter_matrix_sub = parser.add_subparsers(
         dest="adapter_matrix_command",
         required=True,
     )
