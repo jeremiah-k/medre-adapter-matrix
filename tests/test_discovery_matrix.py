@@ -1,7 +1,9 @@
 """Discovery contract for a separately installed MEDRE transport."""
+
 from importlib.metadata import entry_points
 
-from medre.adapter_registry import AdapterSpec, get_adapter_spec
+from medre.adapter_registry import get_adapter_spec
+from medre.adapter_spec import AdapterSpec
 
 
 def test_adapter_entry_point() -> None:

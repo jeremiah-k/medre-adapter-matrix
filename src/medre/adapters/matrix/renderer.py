@@ -32,11 +32,10 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from medre.adapters._attribution_dispatch import project_source_fields
-from medre.adapters._native_metadata_dispatch import current_native_namespace
 from medre.adapters.matrix.event_shape import mmrelay_interop_fields
 from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 from medre.adapters.matrix.outbound import MatrixOutboundOperation
+from medre.adapters.metadata import current_native_namespace, project_source_fields
 from medre.core.events import CanonicalEvent, EventRelation
 from medre.core.events.attachments import (
     attachment_descriptor_from_event_payload,

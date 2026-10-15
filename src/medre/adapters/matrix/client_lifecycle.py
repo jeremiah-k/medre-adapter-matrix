@@ -26,9 +26,7 @@ async def close_matrix_client(
         close_matrix_store(client, logger)
 
 
-def close_matrix_store(
-    client: object, logger: logging.Logger | None = None
-) -> None:
+def close_matrix_store(client: object, logger: logging.Logger | None = None) -> None:
     """Close the database opened by nio's MatrixStore without deleting state."""
     database = getattr(getattr(client, "store", None), "database", None)
     if database is None:

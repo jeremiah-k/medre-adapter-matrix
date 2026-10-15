@@ -44,6 +44,12 @@ jobs:
           echo "Core baseline: ${core_sha}; adapter: ${adapter_sha}"
           echo "Core baseline: ${core_sha}; adapter: ${adapter_sha}" >> "$GITHUB_STEP_SUMMARY"
           echo "The pinned compatibility pair is qualified by MEDRE core CI." >> "$GITHUB_STEP_SUMMARY"
+      - name: Check Python quality and whitespace
+        if: matrix.mode == 'fake' && matrix.python == '3.13'
+        run: |
+          uvx --from ruff==0.16.9 ruff check src tests
+          uvx --from black==26.5.1 black --check src tests
+          git show --format= --check HEAD
       - name: Install core test environment
         run: uv sync --project .core --locked --extra dev
       - name: Install this adapter without native SDKs
@@ -83,10 +89,17 @@ jobs:
           version-file: .core/.tool-versions
           python-version: "3.13"
           enable-cache: true
+      - name: Record Windows baseline revision pair
+        shell: bash
+        run: |
+          core_sha=$(git -C .core rev-parse HEAD)
+          adapter_sha=$(git rev-parse HEAD)
+          echo "Core baseline: ${core_sha}; adapter: ${adapter_sha}"
+          echo "Core baseline: ${core_sha}; adapter: ${adapter_sha}" >> "$GITHUB_STEP_SUMMARY"
       - name: Install pinned core and Matrix with native encryption
         run: |
           uv sync --project .core --locked --extra dev
-          uv pip install --python .core/.venv/Scripts/python.exe -e ".[test,e2e]"
+          .core/.venv/Scripts/python.exe .core/scripts/ci/install_checkout_adapter.py --adapter . --test --python .core/.venv/Scripts/python.exe
       - name: Prove installed cryptography is enabled, not merely importable
         run: |
           .core/.venv/Scripts/python.exe -c "from nio.crypto import ENCRYPTION_ENABLED; assert ENCRYPTION_ENABLED, 'mindroom-nio E2EE is disabled on Windows'"
