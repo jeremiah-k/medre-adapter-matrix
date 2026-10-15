@@ -78,6 +78,19 @@ A fresh Matrix session requests full room state alongside its saved event cursor
 This restores membership names and encryption state after a process restart;
 subsequent syncs retain the incremental cursor without replaying old messages.
 
+Matrix event `content.medre` carries versioned canonical provenance and selected
+metadata. `metadata_embedding_mode` is destination-specific: `off` omits the
+MEDRE namespace, `minimal` carries event/actor identity, `safe` adds native
+message references and normalized metadata, and `full` also includes provider
+native and custom metadata. Full mode exports those details deliberately;
+configuration and SDK objects are never embedded.
+
+Meshtastic's `mmrelay_compatibility` independently adds the legacy
+`meshtastic_*` Matrix content fields. Disable that flag and select `off` for
+content without relay metadata. Embedded provenance is an untrusted relay hint,
+not delivery evidence or authorization to operate on another message. The wire
+contract is [matrix-embedded-metadata.schema.json](docs/schemas/matrix-embedded-metadata.schema.json).
+
 ## Tests
 
 Protocol and SDK contract tests live in this repository with adapter-owned

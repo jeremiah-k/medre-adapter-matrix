@@ -33,7 +33,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from medre.adapters.matrix.event_shape import mmrelay_interop_fields
-from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
+from medre.adapters.matrix.metadata import build_matrix_metadata_content
 from medre.adapters.matrix.outbound import MatrixOutboundOperation
 from medre.adapters.metadata import current_native_namespace, project_source_fields
 from medre.core.events import CanonicalEvent, EventRelation
@@ -473,10 +473,10 @@ class MatrixRenderer:
                         "event_id": mx_event_id,
                     }
                 }
-            # Always inject KEY_REPLY_ID when a Matrix-native target or MMRelay metadata is present
-            # (used by MMRelay-compatible Matrix consumers)
+            # Legacy reply identity is opt-in; native Matrix relations remain
+            # available independently of mmrelay interoperability.
             mx_reply_id = mmrelay_id if mmrelay_id not in (None, "") else mx_event_id
-            if mx_reply_id not in (None, ""):
+            if self._get_mmrelay_compat(event) and mx_reply_id not in (None, ""):
                 content[KEY_REPLY_ID] = str(mx_reply_id)
 
         elif selected_reaction is not None:
@@ -489,13 +489,7 @@ class MatrixRenderer:
             )
 
         # Embed metadata envelope
-        envelope = MatrixMetadataEnvelope(
-            canonical_event_id=event.event_id,
-            source_adapter=event.source_adapter,
-            source_channel=event.source_channel_id or "",
-            metadata_mode="safe",
-        )
-        content.update(envelope.to_content())
+        self._embed_metadata(event, ctx, content)
 
         # Inject mmrelay-compatible metadata when enabled (skip for
         # reactions — _render_reaction already handles all MMRelay keys).
@@ -577,13 +571,7 @@ class MatrixRenderer:
         }
 
         # Embed metadata envelope
-        envelope = MatrixMetadataEnvelope(
-            canonical_event_id=event.event_id,
-            source_adapter=event.source_adapter,
-            source_channel=event.source_channel_id or "",
-            metadata_mode="safe",
-        )
-        content.update(envelope.to_content())
+        self._embed_metadata(event, ctx, content)
 
         # Inject mmrelay-compatible metadata when enabled — relation
         # rendering is degraded but transport metadata is still valid.
@@ -834,34 +822,35 @@ class MatrixRenderer:
             content["msgtype"] = "m.emote"
             content["body"] = emote_body
             content["formatted_body"] = self._text_to_html(emote_body)
-            content[KEY_EMOJI] = EMOJI_FLAG_VALUE
-            content[KEY_REACTION_KEY] = symbol
+            if self._get_mmrelay_compat(event):
+                content[KEY_EMOJI] = EMOJI_FLAG_VALUE
+                content[KEY_REACTION_KEY] = symbol
 
-            # KEY_TEXT: original text preview (not reaction emoji)
-            content[KEY_TEXT] = original_text
+                # KEY_TEXT: original text preview (not reaction emoji)
+                content[KEY_TEXT] = original_text
 
-            # KEY_REPLY_ID: prefer meshtastic_reply_id from metadata,
-            # fall back to the Matrix-native target event ID when available.
-            mmrelay_reply_id = rel_meta.get("meshtastic_reply_id")
-            if mmrelay_reply_id not in (None, ""):
-                content[KEY_REPLY_ID] = str(mmrelay_reply_id)
-            elif mx_event_id not in (None, ""):
-                content[KEY_REPLY_ID] = str(mx_event_id)
+                # KEY_REPLY_ID: prefer meshtastic_reply_id from metadata,
+                # fall back to the Matrix-native target event ID when available.
+                mmrelay_reply_id = rel_meta.get("meshtastic_reply_id")
+                if mmrelay_reply_id not in (None, ""):
+                    content[KEY_REPLY_ID] = str(mmrelay_reply_id)
+                elif mx_event_id not in (None, ""):
+                    content[KEY_REPLY_ID] = str(mx_event_id)
 
-            # Mesh provenance metadata
-            native_data: dict[str, object] = {}
-            if event.metadata and event.metadata.native:
-                native_data = dict(event.metadata.native.data)
+                # Mesh provenance metadata
+                native_data: dict[str, object] = {}
+                if event.metadata and event.metadata.native:
+                    native_data = dict(event.metadata.native.data)
 
-            content[KEY_ID] = self._resolve_mmrelay_packet_id(native_data)
-            _longname, _shortname = self._resolve_mmrelay_sender_names(native_data)
-            content[KEY_LONGNAME] = _longname
-            content[KEY_SHORTNAME] = _shortname
-            content[KEY_MESHNET] = self._resolve_mmrelay_meshnet(
-                event,
-                ctx.source_origin_label if ctx is not None else None,
-            )
-            content[KEY_PORTNUM] = PORTNUM_TEXT
+                content[KEY_ID] = self._resolve_mmrelay_packet_id(native_data)
+                _longname, _shortname = self._resolve_mmrelay_sender_names(native_data)
+                content[KEY_LONGNAME] = _longname
+                content[KEY_SHORTNAME] = _shortname
+                content[KEY_MESHNET] = self._resolve_mmrelay_meshnet(
+                    event,
+                    ctx.source_origin_label if ctx is not None else None,
+                )
+                content[KEY_PORTNUM] = PORTNUM_TEXT
 
             return _reaction_prefix_meta, "m.room.message"
 
@@ -1298,6 +1287,17 @@ class MatrixRenderer:
             fallback_applied=None,
         )
 
+    def _embed_metadata(
+        self,
+        event: CanonicalEvent,
+        ctx: RenderingContext,
+        content: dict[str, object],
+    ) -> None:
+        """Apply the destination instance's metadata policy on every send path."""
+        config = self._configs.get(ctx.target_adapter)
+        mode = getattr(config, "metadata_embedding_mode", "safe")
+        content.update(build_matrix_metadata_content(event, mode))
+
     def _finalize_send_content(
         self,
         event: CanonicalEvent,
@@ -1309,13 +1309,7 @@ class MatrixRenderer:
         Shared by the thread/edit/plain native renders.  Returns the
         result-metadata dict (renderer name + operation kind).
         """
-        envelope = MatrixMetadataEnvelope(
-            canonical_event_id=event.event_id,
-            source_adapter=event.source_adapter,
-            source_channel=event.source_channel_id or "",
-            metadata_mode="safe",
-        )
-        content.update(envelope.to_content())
+        self._embed_metadata(event, ctx, content)
         if self._get_mmrelay_compat(event):
             self._inject_mmrelay_metadata(event, content, ctx.source_origin_label)
         metadata: dict[str, object] = {

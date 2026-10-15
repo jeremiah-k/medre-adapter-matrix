@@ -146,6 +146,7 @@ class FakeMatrixAdapter(AdapterContract):
         channel: str = "test_matrix_room",
     ) -> None:
         super().__init__()
+        self._capabilities = _FAKE_MATRIX_CAPABILITIES
         self.adapter_id = adapter_id
         self._channel: str = channel
         self.ctx: AdapterContext | None = None
@@ -180,7 +181,7 @@ class FakeMatrixAdapter(AdapterContract):
             platform=self.platform,
             role=self.role,
             version="0.1.0",
-            capabilities=_FAKE_MATRIX_CAPABILITIES,
+            capabilities=self._capabilities,
             health="healthy" if self._started else "unknown",
         )
 

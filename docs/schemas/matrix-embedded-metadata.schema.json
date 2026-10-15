@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://medre.dev/schemas/matrix-embedded-metadata.schema.json",
+  "title": "MEDRE Matrix embedded provenance",
+  "type": "object",
+  "required": ["envelope"],
+  "additionalProperties": false,
+  "properties": {
+    "envelope": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "canonical_event_id",
+        "source_transport_id",
+        "metadata_mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "canonical_event_id": {
+          "type": "string"
+        },
+        "source_transport_id": {
+          "type": "string"
+        },
+        "source_adapter": {
+          "type": "string"
+        },
+        "source_channel": {
+          "type": "string"
+        },
+        "provenance": {
+          "type": "string"
+        },
+        "relation_info": {
+          "type": "string"
+        },
+        "lineage_pointer": {
+          "type": "string"
+        },
+        "native_source_summary": {
+          "type": "string"
+        },
+        "event_kind": {
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "metadata_mode": {
+          "enum": ["minimal", "safe", "full"]
+        },
+        "trace_id": {
+          "type": ["string", "null"]
+        },
+        "root_event_id": {
+          "type": ["string", "null"]
+        },
+        "conversation_id": {
+          "type": ["string", "null"]
+        },
+        "source_native_ref": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "adapter",
+                "native_channel_id",
+                "native_message_id",
+                "native_thread_id"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "adapter": {
+                  "type": "string"
+                },
+                "native_message_id": {
+                  "type": "string"
+                },
+                "native_channel_id": {
+                  "type": ["string", "null"]
+                },
+                "native_thread_id": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "envelope": {
+            "properties": {
+              "metadata_mode": {
+                "const": "minimal"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "metadata": false,
+          "envelope": {
+            "additionalProperties": false,
+            "properties": {
+              "schema_version": {
+                "const": 1
+              },
+              "canonical_event_id": {
+                "type": "string"
+              },
+              "source_transport_id": {
+                "type": "string"
+              },
+              "metadata_mode": {
+                "enum": ["minimal", "safe", "full"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "envelope": {
+            "properties": {
+              "metadata_mode": {
+                "const": "safe"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "metadata": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "transport": {
+                "type": "object"
+              },
+              "routing": {
+                "type": "object"
+              },
+              "radio": {
+                "type": "object"
+              },
+              "telemetry": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

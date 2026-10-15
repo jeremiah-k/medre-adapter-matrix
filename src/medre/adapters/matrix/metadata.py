@@ -15,7 +15,12 @@ the canonical core model.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+import msgspec
+
+if TYPE_CHECKING:
+    from medre.core.events import CanonicalEvent
 
 MATRIX_METADATA_ENVELOPE_SCHEMA_VERSION = 1
 
@@ -139,3 +144,59 @@ class MatrixMetadataEnvelope:
                 }
             }
         }
+
+
+def build_matrix_metadata_content(
+    event: CanonicalEvent, mode: str = "safe"
+) -> dict[str, object]:
+    """Project canonical provenance into the selected Matrix wire envelope.
+
+    Safe mode includes only core's normalized metadata domains. Provider-native
+    and custom metadata require explicit full mode; configuration and SDK
+    objects are never inputs. The envelope is a relay hint, not authorization
+    or proof of delivery. MMRelay fields have their own independent opt-in.
+    """
+    if mode not in {"off", "minimal", "safe", "full"}:
+        raise ValueError(f"Unknown Matrix metadata embedding mode: {mode!r}")
+    if mode == "off":
+        return {}
+
+    envelope: dict[str, object] = {
+        "schema_version": MATRIX_METADATA_ENVELOPE_SCHEMA_VERSION,
+        "canonical_event_id": event.event_id,
+        "source_transport_id": event.source_transport_id,
+        "metadata_mode": mode,
+    }
+    if mode == "minimal":
+        return {"medre": {"envelope": envelope}}
+
+    envelope.update(
+        MatrixMetadataEnvelope(
+            canonical_event_id=event.event_id,
+            source_adapter=event.source_adapter,
+            source_channel=event.source_channel_id or "",
+            provenance=(
+                (event.metadata.transport.protocol or "")
+                if event.metadata.transport
+                else ""
+            ),
+            relation_info=",".join(sorted({r.relation_type for r in event.relations})),
+            lineage_pointer=event.parent_event_id or "",
+            metadata_mode=mode,
+        ).to_content()["medre"]["envelope"]
+    )
+    envelope.update(
+        event_kind=event.event_kind,
+        source_native_ref=msgspec.to_builtins(event.source_native_ref),
+        trace_id=event.trace_id,
+        root_event_id=event.root_event_id,
+        conversation_id=event.conversation_id,
+    )
+    metadata = msgspec.to_builtins(event.metadata)
+    if mode == "safe":
+        metadata = {
+            name: metadata[name]
+            for name in ("transport", "routing", "radio", "telemetry")
+            if metadata.get(name) is not None
+        }
+    return {"medre": {"envelope": envelope, "metadata": metadata}}
