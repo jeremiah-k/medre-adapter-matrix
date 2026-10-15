@@ -74,6 +74,10 @@ Matrix configures the core-owned `medre adapter matrix` parser. Optional CLI
 registration failures are reported as `broken CLI contribution` without
 disabling generic help, preflight, healthy commands, or runtime discovery.
 
+A fresh Matrix session requests full room state alongside its saved event cursor.
+This restores membership names and encryption state after a process restart;
+subsequent syncs retain the incremental cursor without replaying old messages.
+
 ## Tests
 
 Protocol and SDK contract tests live in this repository with adapter-owned

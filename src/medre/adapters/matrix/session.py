@@ -2238,7 +2238,10 @@ class MatrixSession:
             client.sync_forever(
                 timeout=self._config.sync_timeout_ms,
                 since=self._committed_sync_token,
-                full_state=self._committed_sync_token is None,
+                # A saved cursor resumes events, not the fresh client's room
+                # membership/encryption cache. Request full state until this
+                # client has completed its first successful sync.
+                full_state=not self._initial_sync_done,
             )
         )
         stale_timeout = float(self._config.sync_stale_timeout_seconds)
