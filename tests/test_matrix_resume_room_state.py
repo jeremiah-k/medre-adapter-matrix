@@ -24,7 +24,9 @@ async def test_fresh_client_requests_full_room_state_even_with_a_saved_cursor(
     )
 
 
-async def test_reconnect_keeps_cursor_without_refetching_initialized_room_state() -> None:
+async def test_reconnect_keeps_cursor_without_refetching_initialized_room_state() -> (
+    None
+):
     session = MatrixSession(make_matrix_config())
     session._committed_sync_token = "durable-cursor"
     session._initial_sync_done = True
