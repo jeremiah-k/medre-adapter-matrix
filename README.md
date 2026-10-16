@@ -53,6 +53,14 @@ is needed. First-party siblings:
 Choose providers for the platforms in your deployment and review their own
 dependency and license requirements.
 
+## Restart and offline messages
+
+Classic Sync resumes from MEDRE's durable checkpoint. Events received during
+startup are durably admitted before they are acknowledged, including messages
+sent while MEDRE was offline. Initial history remains suppressed from routing.
+Callbacks arriving after shutdown defer admission rather than advancing a
+checkpoint without retaining the message.
+
 ## Ownership and imports
 
 This distribution owns Matrix's transport implementation, configuration models,

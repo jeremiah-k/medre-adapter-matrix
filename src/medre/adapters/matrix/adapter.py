@@ -62,6 +62,7 @@ from medre.core.contracts.delivery import AdapterHandoffResult
 from medre.core.events.attachments import ATTACHMENT_PAYLOAD_KEY
 from medre.core.events.kinds import EventKind
 from medre.core.ingress import (
+    DurableIngressDeferredError,
     AttachmentTransferPermitTimeoutError,
     InboundAttachmentContent,
     IngressProvenance,
@@ -264,6 +265,7 @@ class MatrixAdapter(AdapterContract):
         "_relation_handler",
         "_envelope_handler",
         "_started",
+        "_starting",
         "ctx",
         # Delivery retry / rate-limit stats
         "_transient_delivery_failures",
@@ -307,6 +309,7 @@ class MatrixAdapter(AdapterContract):
         self._relation_handler = MatrixRelationHandler()
         self._envelope_handler = MatrixMetadataEnvelope
         self._started: bool = False
+        self._starting: bool = False
         self.ctx: AdapterContext | None = None
         # Delivery retry / server-directed cooldown stats
         self._transient_delivery_failures: int = 0
@@ -412,69 +415,47 @@ class MatrixAdapter(AdapterContract):
             logger=session_logger,
             auto_join_rooms=self._config.auto_join_rooms,
         )
+        self._starting = True
         try:
             await self._session.start()
-        except asyncio.CancelledError:
-            # Synchronously clear adapter-owned fields before re-raising.
-            # Best-effort session cleanup — shielded so it can't be cancelled.
-            try:
-                await asyncio.shield(self._session.stop())
-            except Exception:
-                pass
-            self._session = None
-            self._started = False
-            self._start_time = None
-            self.ctx = None
-            raise
-        except Exception as exc:
-            self._sync_failure_stored = exc
-            try:
-                await self._session.stop()
-            except Exception:
-                pass  # best-effort cleanup
-            self._session = None
-            self._started = False
-            self._start_time = None
-            self.ctx = None
-            raise
-
-        # Auto-join configured rooms after startup.
-        if self._config.auto_join_rooms:
-            ctx.logger.debug("Matrix session connected; joining configured rooms")
-            try:
+            if self._config.auto_join_rooms:
+                ctx.logger.debug("Matrix session connected; joining configured rooms")
                 join_results = await self._session.ensure_joined_rooms(
                     self._config.auto_join_rooms
                 )
-                joined_count = sum(1 for v in join_results.values() if v)
-                failed_count = len(join_results) - joined_count
+                joined_count = sum(1 for value in join_results.values() if value)
                 ctx.logger.info(
                     "Auto-join: %d configured, %d joined, %d failed",
                     len(self._config.auto_join_rooms),
                     joined_count,
-                    failed_count,
+                    len(join_results) - joined_count,
                 )
-            except Exception as exc:
-                # Auto-join failed — capture actual exception, clean up.
+            self._started = True
+            self._mark_started(ctx)
+            ctx.logger.info("MatrixAdapter %s started", self.adapter_id)
+        except BaseException as exc:
+            self._starting = False
+            if isinstance(exc, Exception):
                 self._sync_failure_stored = exc
-                try:
-                    await self._session.stop()
-                except Exception:
-                    pass  # best-effort cleanup
+            try:
+                await asyncio.shield(self._session.stop())
+            except Exception:
+                pass
+            finally:
                 self._session = None
                 self._started = False
                 self._start_time = None
                 self.ctx = None
-                raise
-
-        self._started = True
-        self._mark_started(ctx)
-        ctx.logger.info("MatrixAdapter %s started", self.adapter_id)
+            raise
+        finally:
+            self._starting = False
 
     async def stop(self, timeout: float = 5.0) -> None:
         """Stop syncing and disconnect from the homeserver.
 
         Idempotent: safe to call multiple times or before start().
         """
+        self._starting = False
         self._started = False
         self._start_time = None
 
@@ -1164,7 +1145,16 @@ class MatrixAdapter(AdapterContract):
             ``server_timestamp``, ``sender_display_name``, Matrix event type,
             transaction ID, room encryption state, and safe decryption provenance.
         """
-        if self.ctx is None or not self._started:
+        # Classic Sync may deliver resumed events from inside session.start().
+        # Durable admission must precede acknowledgement even before start()
+        # returns; legacy non-durable callbacks retain their startup guard.
+        if self.ctx is None or not (self._started or self._starting):
+            if provenance is not None:
+                raise DurableIngressDeferredError(
+                    str(event.get("event_id", "")), ("matrix_adapter_inactive",)
+                )
+            return
+        if provenance is None and not self._started:
             return
 
         room_id = str(event.get("room_id", "") or "")
