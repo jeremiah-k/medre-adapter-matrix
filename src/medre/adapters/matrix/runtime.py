@@ -27,7 +27,10 @@ def prepare_matrix_runtime_config(
 
     Enabled-route source and target room IDs are merged with explicitly
     configured auto-join rooms. Raises :class:`ValueError` when an explicit
-    room allowlist omits a source room used by an enabled route.
+    room allowlist omits a source context used by an enabled route. Matrix
+    source contexts must be room IDs: the runtime allowlist filter compares
+    inbound event room IDs, so an alias-form channel could never be
+    authorized by the allowlist nor match a delivered event.
     """
     prepared = config
     if prepared.store_path is None:
@@ -42,9 +45,10 @@ def prepare_matrix_runtime_config(
         source = getattr(route, "source", None)
         if source is not None and getattr(source, "adapter", None) == adapter_id:
             channel = getattr(source, "channel", None)
-            if isinstance(channel, str) and channel.startswith("!"):
+            if isinstance(channel, str) and channel:
                 source_rooms.add(channel)
-                all_rooms.add(channel)
+                if channel.startswith("!"):
+                    all_rooms.add(channel)
         for target in getattr(route, "targets", ()):
             if getattr(target, "adapter", None) != adapter_id:
                 continue
@@ -57,9 +61,9 @@ def prepare_matrix_runtime_config(
         if missing:
             raise ValueError(
                 f"Matrix adapter {adapter_id!r} has room_allowlist that omits "
-                f"source rooms from routes: {sorted(missing)}. Either add these "
-                f"rooms to room_allowlist or set room_allowlist to None to "
-                f"accept all rooms."
+                f"source rooms from routes: {sorted(missing)}. Matrix source "
+                f"contexts must be room IDs listed in room_allowlist; set "
+                f"room_allowlist to None to accept all rooms."
             )
 
     merged = tuple(sorted(all_rooms))
