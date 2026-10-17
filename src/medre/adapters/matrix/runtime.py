@@ -28,9 +28,8 @@ def prepare_matrix_runtime_config(
     Enabled-route source and target room IDs are merged with explicitly
     configured auto-join rooms. Raises :class:`ValueError` when an explicit
     room allowlist omits a source context used by an enabled route. Matrix
-    source contexts must be room IDs: the runtime allowlist filter compares
-    inbound event room IDs, so an alias-form channel could never be
-    authorized by the allowlist nor match a delivered event.
+    source contexts must be room IDs even without an allowlist: incoming
+    events are keyed by room ID, so aliases cannot match inbound messages.
     """
     prepared = config
     if prepared.store_path is None:
@@ -46,9 +45,14 @@ def prepare_matrix_runtime_config(
         if source is not None and getattr(source, "adapter", None) == adapter_id:
             channel = getattr(source, "channel", None)
             if isinstance(channel, str) and channel:
+                if not channel.startswith("!"):
+                    raise ValueError(
+                        f"Matrix adapter {adapter_id!r} source context "
+                        f"{channel!r} must be a room ID starting with '!'; "
+                        "room aliases cannot match incoming event room IDs."
+                    )
                 source_rooms.add(channel)
-                if channel.startswith("!"):
-                    all_rooms.add(channel)
+                all_rooms.add(channel)
         for target in getattr(route, "targets", ()):
             if getattr(target, "adapter", None) != adapter_id:
                 continue

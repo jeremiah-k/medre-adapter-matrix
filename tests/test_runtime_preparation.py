@@ -22,7 +22,7 @@ def test_allowlist_rejects_alias_format_source_channels() -> None:
     config = make_matrix_config(
         room_allowlist={"!room:example.com"}, store_path="/tmp/store"
     )
-    with pytest.raises(ValueError, match="room_allowlist that omits source rooms"):
+    with pytest.raises(ValueError, match="must be a room ID"):
         prepare_matrix_runtime_config(
             config,
             adapter_id="matrix-1",
@@ -64,3 +64,15 @@ def test_allowlist_check_skips_disabled_routes_and_other_adapters() -> None:
         ],
     )
     assert prepared.auto_join_rooms == ("!room:example.com",)
+
+
+def test_alias_source_is_invalid_even_when_no_allowlist_is_configured() -> None:
+    """Absent allowlist cannot turn an unmatchable alias into live ingress."""
+    config = make_matrix_config(room_allowlist=None, store_path="/tmp/store")
+    with pytest.raises(ValueError, match="must be a room ID"):
+        prepare_matrix_runtime_config(
+            config,
+            adapter_id="matrix-1",
+            paths=SimpleNamespace(),
+            routes=[_route("#room:server.org")],
+        )
