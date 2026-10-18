@@ -1,10 +1,27 @@
 """Declarative registration for the separately distributed adapter."""
 
+from medre import adapter_spec as registration
 from medre.adapter_spec import AdapterSpec, DestinationSpec, SymbolRef
 
 
 def adapter_spec() -> AdapterSpec:
+    # Prompt metadata is optional; discovery works with released core versions
+    # that do not expose the authoring form contract.
+    native_setup = {}
+    NativeSetupField = getattr(registration, "NativeSetupField", None)
+    if NativeSetupField is not None:
+        native_setup["native_setup_fields"] = (
+            NativeSetupField("homeserver", "Homeserver URL"),
+            NativeSetupField("user_id", "Matrix user ID"),
+            NativeSetupField(
+                "access_token",
+                "Access token (blank uses configured sidecar)",
+                required=False,
+                secret=True,
+            ),
+        )
     return AdapterSpec(
+        **native_setup,
         sample_config=SymbolRef("medre.adapters.matrix.sample", "sample_config"),
         destinations=(
             DestinationSpec(
