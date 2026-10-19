@@ -30,6 +30,7 @@ never degrades into an ordinary message.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Mapping
 
 from medre.adapters.matrix.event_shape import mmrelay_interop_fields
@@ -186,20 +187,18 @@ class MatrixRenderer:
 
     def _get_matrix_relay_prefix(
         self, event: CanonicalEvent, target_adapter: str = ""
-    ) -> str:
+    ) -> str | None:
         """Resolve matrix relay prefix for rendering.
 
         Resolution order:
-        1. Target adapter config (``configs``) ``relay_prefix`` — target-local.
-        2. Empty string (neutral default).
+        Target-local ``None`` selects automatic attribution. An explicit empty
+        string disables prefixes. Without a target config, remain neutral.
         """
         # Target-local: look up target adapter in Matrix configs
         if target_adapter and self._configs:
             target_cfg = self._configs.get(target_adapter)
             if target_cfg is not None:
-                rp = getattr(target_cfg, "relay_prefix", "")
-                if rp:
-                    return rp
+                return getattr(target_cfg, "relay_prefix", "")
         return ""
 
     def _get_mmrelay_compat(self, event: CanonicalEvent) -> bool:
@@ -707,13 +706,13 @@ class MatrixRenderer:
             return normalized[:max_len] + "..."
         return normalized
 
-    def _format_reaction_prefix(
+    def _format_matrix_prefix(
         self,
         event: CanonicalEvent,
         target_adapter: str = "",
         ctx: RenderingContext | None = None,
     ) -> tuple[str, dict[str, object]]:
-        """Format the configured relay prefix for a reaction emote body.
+        """Format target-local attribution for text and reaction emote bodies.
 
         Uses the shared generic attribution builder and safe prefix formatter.
 
@@ -723,10 +722,30 @@ class MatrixRenderer:
         formatted, empty dict otherwise.
         """
         template = self._get_matrix_relay_prefix(event, target_adapter)
-        if not template:
+        if template == "":
             return "", {}
 
         attr = self._build_source_attribution(event, ctx)
+        if template is None:
+            sender = (
+                attr.source_sender_label
+                or attr.source_sender_short_label
+                or attr.source_sender_id
+                or event.source_transport_id
+                or event.source_adapter
+            )
+            if not sender.isprintable():
+                sender = (
+                    attr.source_sender_id
+                    or event.source_transport_id
+                    or event.source_adapter
+                )
+            attr = replace(attr, source_sender_label=sender)
+            template = (
+                "[{sender}/{origin_label}]: "
+                if attr.source_origin_label
+                else "[{sender}]: "
+            )
         fmt_result = format_relay_prefix(template, attr)
 
         # On internal exception, return empty prefix (preserve safety).
@@ -806,7 +825,7 @@ class MatrixRenderer:
             original_text = self._abbreviate_text(
                 self._extract_original_text(rel, event)
             )
-            prefix, _reaction_prefix_meta = self._format_reaction_prefix(
+            prefix, _reaction_prefix_meta = self._format_matrix_prefix(
                 event, target_adapter, ctx
             )
 
@@ -1388,28 +1407,8 @@ class MatrixRenderer:
         formatting exception occurred; otherwise it contains diagnostic
         keys from :class:`PrefixFormatterResult`.
         """
-        template = self._get_matrix_relay_prefix(event, target_adapter)
-        if not template:
-            return body, {}
-
-        attr = self._build_source_attribution(event, ctx)
-        fmt_result = format_relay_prefix(template, attr)
-
-        # On internal exception, return body unchanged (preserve safety).
-        if fmt_result.formatting_error and fmt_result.formatting_error.startswith(
-            "formatting_exception:"
-        ):
-            return body, {}
-
-        formatter_meta: dict[str, object] = {
-            "relay_prefix_template": fmt_result.template_used,
-            "relay_prefix_rendered": fmt_result.rendered_prefix,
-            "relay_prefix_variables_used": fmt_result.variables_used,
-            "relay_prefix_missing_variables": fmt_result.missing_variables,
-            "relay_prefix_unknown_variables": fmt_result.unknown_variables,
-            "relay_prefix_formatting_error": fmt_result.formatting_error,
-        }
-        return f"{fmt_result.rendered_prefix}{body}", formatter_meta
+        prefix, metadata = self._format_matrix_prefix(event, target_adapter, ctx)
+        return f"{prefix}{body}", metadata
 
     # ------------------------------------------------------------------
     # mmrelay compatibility

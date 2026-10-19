@@ -195,3 +195,10 @@ SDK-free tier. Native schemas and validated examples live in `docs/schemas` here
 This repository declares its own Ruff/Black policy. CI checks all Python source
 and tests, plus commit whitespace, alongside the fake/native qualification tiers.
 The native adapter package includes its own `py.typed` marker.
+
+## Default relay attribution
+
+Matrix output defaults to `[sender/origin]: message`, preserving the full sender
+name. An absent origin renders `[sender]: message`. Set `relay_prefix: ""` to
+disable attribution or supply a custom generic template. Omitted/null selects
+the automatic policy; MMRelay wire metadata keeps the original unprefixed text.

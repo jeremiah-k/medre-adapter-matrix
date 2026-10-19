@@ -581,10 +581,10 @@ def test_matrix_origin_label_none_rejected(monkeypatch: pytest.MonkeyPatch) -> N
 # ===================================================================
 
 
-def test_matrix_relay_prefix_default_is_empty_string(
+def test_matrix_relay_prefix_default_is_automatic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default relay_prefix is empty string."""
+    """An omitted relay_prefix selects automatic attribution."""
     monkeypatch.setattr(
         "medre.config.adapters.matrix_credentials.load_credentials_json",
         lambda: None,
@@ -595,7 +595,7 @@ def test_matrix_relay_prefix_default_is_empty_string(
         user_id="@bot:example.com",
         access_token="s3cret",
     )
-    assert config.relay_prefix == ""
+    assert config.relay_prefix is None
 
 
 def test_matrix_relay_prefix_valid_string_accepted(
