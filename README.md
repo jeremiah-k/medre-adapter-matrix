@@ -27,6 +27,56 @@ for a locked uv deployment project, private Git, local checkouts, index sources,
 and the same-environment requirement. Neither MEDRE nor the provider installs
 packages during runtime startup.
 
+## Browser-approved Matrix login
+
+For an OAuth-enabled homeserver, authorize MEDRE from your browser instead of
+providing its account password. Install the `e2e` extra first when preparing
+an encrypted adapter:
+
+```bash
+medre adapter matrix auth login --oauth \
+  --user @relay:example.org --adapter-id matrix
+medre adapter matrix auth status
+```
+
+Use the configured adapter key for `--adapter-id`. The command displays the
+verification address and a short code. Approve only the login you initiated.
+Homeserver discovery follows Matrix delegation; `--homeserver` can select an
+explicit server. `--client-id` supports an existing public client registration
+when dynamic registration is unavailable. Without `--adapter-id`, the command
+only establishes credentials and does not load the E2EE SDK.
+
+Keep credentials out of the runtime YAML so its missing authentication fields
+resolve from MEDRE's credential sidecar. Runtime requests automatically renew
+OAuth tokens, including SDK retry attempts. Repeating the login command resumes
+the saved device session and retries signing instead of allocating another
+device. Password options cannot be combined with `--oauth`.
+
+The browser may request a separate signing-key approval. A matching account
+identity is reused across devices; a missing local identity for an account that
+already has signing keys requires restoring the original store. Deliberately
+replacing lost or conflicting account keys requires `--reset-cross-signing`:
+
+```bash
+medre adapter matrix auth login --oauth --adapter-id matrix --reset-cross-signing
+```
+
+A reset can require other clients to verify the account identity again. It is
+not part of routine login. Signing failures retain OAuth credentials and E2EE
+state so setup can be retried. Own-device signing does not verify other users
+or restore historical encrypted room keys.
+
+Stop bridges using this account before changing sessions. To revoke a saved
+password or OAuth session and then authenticate again, use:
+
+```bash
+medre adapter matrix auth logout
+```
+
+Logout preserves the crypto store and account-signing sidecar. Back them up
+securely together. Password login remains available on supporting homeservers
+through the existing interactive or `--password-stdin` commands.
+
 ## Packaging and provenance
 
 This distribution registers the `medre.adapters` entry point and retains the
@@ -202,7 +252,6 @@ Matrix output defaults to `[sender/origin]: message`, preserving the full sender
 name. An absent origin renders `[sender]: message`. Set `relay_prefix: ""` to
 disable attribution or supply a custom generic template. Omitted/null selects
 the automatic policy; MMRelay wire metadata keeps the original unprefixed text.
-
 
 ## Device verification
 

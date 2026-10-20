@@ -21,6 +21,7 @@ from medre.adapters.matrix.identity import (
     MatrixCrossSigningDiagnostics,
     MatrixCrossSigningService,
 )
+from medre.adapters.matrix.oauth_session import OAuthSessionManager, attach_oauth
 from medre.config.paths import resolve
 
 __all__ = [
@@ -47,10 +48,11 @@ def matrix_store_path_for_adapter(adapter_id: str) -> Path:
 
 async def bootstrap_login_cross_signing(
     login: MatrixLoginResult,
-    password: str,
+    password: str | None,
     *,
     adapter_id: str,
     reset: bool = False,
+    oauth_manager: OAuthSessionManager | None = None,
     logger: logging.Logger | None = None,
 ) -> MatrixE2EEBootstrapResult:
     """Prepare E2EE state and verify the logged-in Matrix device.
@@ -61,7 +63,7 @@ async def bootstrap_login_cross_signing(
     """
     if not adapter_id:
         raise ValueError("adapter_id must be non-empty for Matrix E2EE bootstrap")
-    if not password:
+    if not password and oauth_manager is None:
         raise ValueError("password is required for Matrix E2EE bootstrap")
     if not _compat_mod.HAS_NIO or not _compat_mod.HAS_E2EE:
         raise MatrixConnectionError(
@@ -91,10 +93,26 @@ async def bootstrap_login_cross_signing(
         raise MatrixConnectionError(f"Failed to configure Matrix E2EE: {exc}") from exc
 
     try:
+        token = login.access_token
+        if oauth_manager is not None:
+            session = oauth_manager.session
+            if (session.homeserver, session.user_id, session.device_id) != (
+                login.homeserver,
+                login.user_id,
+                login.device_id,
+            ):
+                raise MatrixConnectionError(
+                    "OAuth session differs from the E2EE setup identity"
+                )
+            token = await oauth_manager.access_token()
+            attach_oauth(client, oauth_manager)
+            from medre.adapters.matrix.oauth_approval import signing_approval
+
+            client.send = signing_approval(client.send, session.issuer)
         client.restore_login(
             user_id=login.user_id,
             device_id=login.device_id,
-            access_token=login.access_token,
+            access_token=token,
         )
         if not getattr(client, "logged_in", False):
             raise MatrixConnectionError(
@@ -109,10 +127,14 @@ async def bootstrap_login_cross_signing(
             )
 
         service = MatrixCrossSigningService(client, logger=logger)
+        authorization = (
+            {"oauth_authenticated": True} if oauth_manager is not None else {}
+        )
         provider_result = await service.reconcile(
             password=password,
             allow_bootstrap=True,
             reset=reset,
+            **authorization,
         )
         diagnostics = service.diagnostics()
         if provider_result is None or diagnostics.chain_status != "valid":

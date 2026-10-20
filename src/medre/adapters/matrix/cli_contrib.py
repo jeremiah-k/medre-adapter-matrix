@@ -49,6 +49,11 @@ def register_matrix_cli(parser: argparse.ArgumentParser) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
+            "  Browser-approved OAuth login and own-device signing:\n"
+            "    medre adapter matrix auth login --oauth --user @bot:example.com "
+            "--adapter-id matrix\n"
+            "  Repeat --oauth to resume the saved device; auth logout revokes it.\n"
+            "\n"
             "  Interactive (no flags — prompts for user ID and password, derives\n"
             "  homeserver from MXID, does well-known discovery). Preferred for\n"
             "  interactive operators:\n"
@@ -85,6 +90,19 @@ def register_matrix_cli(parser: argparse.ArgumentParser) -> None:
             "\n"
             "Credentials are saved to a sidecar JSON file. No config file required.\n"
         ),
+    )
+    auth_login_p.add_argument(
+        "--oauth",
+        action="store_true",
+        help="Use browser-approved OAuth device login, or resume its saved session",
+    )
+    auth_login_p.add_argument(
+        "--client-id",
+        help="Public OAuth client ID when dynamic registration is unavailable",
+    )
+    adapter_matrix_auth_sub.add_parser(
+        "logout",
+        help="Revoke saved Matrix credentials while retaining E2EE identity state",
     )
     auth_login_p.add_argument(
         "--homeserver",
@@ -125,7 +143,7 @@ def register_matrix_cli(parser: argparse.ArgumentParser) -> None:
         default=False,
         help=(
             "Explicitly replace conflicting/lost cross-signing identity material; "
-            "requires --adapter-id and fresh password authentication"
+            "requires --adapter-id and password or OAuth browser authentication"
         ),
     )
 
@@ -193,6 +211,21 @@ def dispatch_matrix_cli(args: Any) -> bool:
             from medre.adapters.matrix.cli import _adapter_matrix_auth_status
 
             asyncio.run(_adapter_matrix_auth_status())
+            return True
+        if auth_command == "logout":
+            import sys
+            from medre.adapters.matrix.errors import MatrixConnectionError
+            from medre.adapters.matrix.oauth import MatrixOAuthError
+            from medre.adapters.matrix.oauth_cli import logout_credentials
+
+            try:
+                asyncio.run(logout_credentials())
+            except (MatrixConnectionError, MatrixOAuthError, OSError, ValueError):
+                print(
+                    "Matrix logout failed; saved credentials were retained. Check connectivity and retry.",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1) from None
             return True
         if auth_command == "login":
             from medre.adapters.matrix.cli import _adapter_matrix_auth_login

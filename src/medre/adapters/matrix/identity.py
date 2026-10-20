@@ -86,7 +86,7 @@ class MatrixCrossSigningService:
 
     Ordinary runtime reconciliation never creates or rotates a missing
     identity.  Authenticated setup may opt into bootstrap, and identity
-    rotation requires the explicit ``reset=True`` path plus a fresh password.
+    rotation requires the explicit ``reset=True`` path plus authenticated setup.
     """
 
     def __init__(
@@ -110,12 +110,14 @@ class MatrixCrossSigningService:
         password: str | None = None,
         allow_bootstrap: bool = False,
         reset: bool = False,
+        oauth_authenticated: bool = False,
     ) -> str | None:
         """Reconcile local and server-visible own-device cross-signing state.
 
         ``allow_bootstrap`` permits creation only when the homeserver has no
         existing master identity.  ``reset`` is stronger: it permits replacing
-        server identity material and therefore requires ``password``.
+        server identity material and therefore requires a password or an
+        authenticated OAuth setup session with browser authorization.
 
         Expected provider/server failures are reflected in diagnostics and
         return ``None``.  Cancellation always propagates.
@@ -127,6 +129,7 @@ class MatrixCrossSigningService:
                     password=password,
                     allow_bootstrap=allow_bootstrap,
                     reset=reset,
+                    oauth_authenticated=oauth_authenticated,
                 )
         except asyncio.CancelledError:
             raise
@@ -139,8 +142,13 @@ class MatrixCrossSigningService:
             return None
         except Exception as exc:
             self._fail("provider_error", chain_status="error")
-            self._logger.warning("Matrix cross-signing reconciliation failed: %s", exc)
-            self._logger.debug("Matrix cross-signing failure", exc_info=True)
+            self._logger.warning(
+                "Matrix cross-signing reconciliation failed (%s)", type(exc).__name__
+            )
+            self._logger.debug(
+                "Matrix cross-signing failure category: %s",
+                self._diagnostics.last_failure_category,
+            )
             return None
 
     async def _reconcile(
@@ -149,6 +157,7 @@ class MatrixCrossSigningService:
         password: str | None,
         allow_bootstrap: bool,
         reset: bool,
+        oauth_authenticated: bool,
     ) -> str | None:
         provider = self._inspect_provider()
         if provider is None:
@@ -169,7 +178,7 @@ class MatrixCrossSigningService:
         )
 
         if reset:
-            if not password:
+            if not password and not oauth_authenticated:
                 self._fail(
                     "reset_requires_password",
                     chain_status="reset_required",
@@ -236,7 +245,8 @@ class MatrixCrossSigningService:
         except Exception as exc:
             self._fail("provider_inspection_failed", chain_status="error")
             self._logger.warning(
-                "Could not inspect Matrix cross-signing provider support: %s", exc
+                "Could not inspect Matrix cross-signing provider support (%s)",
+                type(exc).__name__,
             )
             return None
         if not callable(ensure_method):
@@ -252,7 +262,8 @@ class MatrixCrossSigningService:
         except Exception as exc:
             self._fail("local_identity_unreadable", chain_status="error")
             self._logger.warning(
-                "Could not inspect the local Matrix cross-signing identity: %s", exc
+                "Could not inspect the local Matrix cross-signing identity (%s)",
+                type(exc).__name__,
             )
             return None
         return cast(_EnsureCrossSigning, ensure_method), identity
@@ -515,7 +526,7 @@ class MatrixCrossSigningService:
             self._logger.warning(
                 "Could not repair Matrix self-signing for device %s: %s",
                 self._client_label("device_id"),
-                exc,
+                type(exc).__name__,
             )
             return False
         return True
@@ -544,7 +555,7 @@ class MatrixCrossSigningService:
             self._logger.warning(
                 "Could not establish Matrix cross-signing for device %s: %s",
                 self._client_label("device_id"),
-                exc,
+                type(exc).__name__,
             )
             return None
         if result not in _VALID_PROVIDER_RESULTS:
@@ -568,7 +579,7 @@ class MatrixCrossSigningService:
         self,
         ensure_method: _EnsureCrossSigning,
         *,
-        password: str,
+        password: str | None,
     ) -> str | None:
         sidecar = self._provider_sidecar_path()
         if sidecar is None:
@@ -614,7 +625,8 @@ class MatrixCrossSigningService:
                 reset_required=True,
             )
             self._logger.warning(
-                "Authenticated Matrix cross-signing reset failed: %s", exc
+                "Authenticated Matrix cross-signing reset failed (%s)",
+                type(exc).__name__,
             )
             return None
 
@@ -673,7 +685,7 @@ class MatrixCrossSigningService:
         )
         self._logger.warning(
             "Replaced Matrix cross-signing identity for %s after explicit "
-            "password-authenticated reset",
+            "authenticated identity reset",
             self._client_label("user_id"),
         )
         return result
