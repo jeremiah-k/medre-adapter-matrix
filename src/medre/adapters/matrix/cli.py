@@ -168,8 +168,8 @@ async def _adapter_matrix_auth_login(args: object) -> None:
         sys.exit(1)
 
     # Step 6: Login + whoami + mismatch check --------------------------------
+    from medre.adapters.matrix.errors import MatrixConnectionError
     from medre.adapters.matrix.auth import (
-        MatrixConnectionError,
         matrix_login,
         matrix_logout,
         matrix_whoami,
@@ -331,8 +331,8 @@ async def _adapter_matrix_provision(args: object) -> None:
         )
         sys.exit(1)
 
+    from medre.adapters.matrix.errors import MatrixConnectionError
     from medre.adapters.matrix.auth import (
-        MatrixConnectionError,
         check_credentials_completeness,
         matrix_whoami,
     )

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal
 
 from medre.config.adapters.matrix_errors import MatrixConfigError
 
@@ -141,7 +141,9 @@ class MatrixConfig:
         if creds is None:
             return self
 
-        overrides: dict[str, str] = {}
+        # Values come straight from the credentials sidecar JSON, so the
+        # keyword bag stays dynamically typed for ``dataclasses.replace``.
+        overrides: dict[str, Any] = {}
         if needs_homeserver and creds.get("homeserver"):
             overrides["homeserver"] = creds["homeserver"]
         if needs_user_id and creds.get("user_id"):

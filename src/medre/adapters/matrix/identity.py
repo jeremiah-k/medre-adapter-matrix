@@ -21,7 +21,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 __all__ = [
     "MatrixCrossSigningDiagnostics",
@@ -735,7 +735,10 @@ class MatrixCrossSigningService:
         repair_required: bool | None = None,
         reset_required: bool | None = None,
     ) -> None:
-        updates: dict[str, object] = {
+        # Field values are heterogeneous (str flags plus optional bool
+        # repair/reset markers), so the keyword bag stays dynamically typed
+        # for ``dataclasses.replace``.
+        updates: dict[str, Any] = {
             "chain_status": chain_status,
             "last_failure_category": category,
         }
