@@ -35,7 +35,7 @@ def _check_e2ee() -> bool:
     if not HAS_NIO:
         return False
     try:
-        from nio.crypto import ENCRYPTION_ENABLED  # type: ignore[import-untyped]
+        from nio.crypto import ENCRYPTION_ENABLED
 
         return bool(ENCRYPTION_ENABLED)
     except Exception:

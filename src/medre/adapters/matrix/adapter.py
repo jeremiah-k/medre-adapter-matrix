@@ -822,17 +822,20 @@ class MatrixAdapter(AdapterContract):
         """
         is_redaction = redacts_event_id is not None
         last_exc: BaseException | None = None
+        session = self._session
+        if session is None:
+            raise AdapterPermanentError("session is not initialized")
         for attempt in range(_MAX_DELIVERY_RETRIES):
             try:
                 if is_redaction:
-                    response = await self._session.room_redact(
+                    response = await session.room_redact(
                         room_id=room_id,
                         event_id=redacts_event_id or "",
                         reason=operation.reason,
                         tx_id=txn_id,
                     )
                 else:
-                    response = await self._session.room_send(
+                    response = await session.room_send(
                         room_id=room_id,
                         message_type=operation.event_type or "m.room.message",
                         content=dict(wire_content or {}),

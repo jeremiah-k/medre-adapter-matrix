@@ -14,6 +14,7 @@ import json
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 
 def get_credentials_path() -> Path:
@@ -29,7 +30,7 @@ def get_credentials_path() -> Path:
     return Path(config_home) / "medre" / "credentials" / "matrix.json"
 
 
-def load_credentials_json(path: Path | None = None) -> dict | None:
+def load_credentials_json(path: Path | None = None) -> dict[str, Any] | None:
     """Load Matrix credentials JSON file.
 
     If *path* is provided, read from that path.  Otherwise use
@@ -42,7 +43,8 @@ def load_credentials_json(path: Path | None = None) -> dict | None:
     if not target.exists():
         return None
     try:
-        return json.loads(target.read_text(encoding="utf-8"))
+        data: dict[str, Any] = json.loads(target.read_text(encoding="utf-8"))
+        return data
     except Exception:
         return None
 

@@ -141,7 +141,7 @@ def matrix_media_descriptor(
     info_dict = info if isinstance(info, dict) else {}
 
     mxc_uri = _nonempty_str(content.get("url"))
-    if encrypted and mxc_uri is None:
+    if isinstance(encrypted_file, dict) and mxc_uri is None:
         mxc_uri = _nonempty_str(encrypted_file.get("url"))
 
     thumbnail_uri = _nonempty_str(info_dict.get("thumbnail_url"))

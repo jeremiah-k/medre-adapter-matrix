@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal, cast
 
 from medre.adapters.matrix.errors import MatrixCodecError
 from medre.adapters.matrix.event_shape import (
@@ -327,12 +327,11 @@ class MatrixCodec(AdapterCodec):
         # m.relates_to when applying m.new_content, and edits of replies omit
         # m.in_reply_to from the replacement event.
         reply_target = relation.reply_to_event_id
-        explicit_thread_reply = (
+        if (
             relation.kind == "thread"
             and reply_target is not None
             and relation.is_falling_back is not True
-        )
-        if explicit_thread_reply:
+        ):
             relations.append(
                 self._native_relation("reply", room_id, reply_target, None)
             )
@@ -347,7 +346,10 @@ class MatrixCodec(AdapterCodec):
     ) -> EventRelation:
         """Build a canonical relation with a stored native target ref."""
         return EventRelation(
-            relation_type=relation_type,  # type: ignore[arg-type]
+            relation_type=cast(
+                Literal["reply", "reaction", "edit", "delete", "thread"],
+                relation_type,
+            ),
             target_event_id=None,
             target_native_ref=NativeRef(
                 adapter=self._adapter_id,

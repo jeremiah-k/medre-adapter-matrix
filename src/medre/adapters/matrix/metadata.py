@@ -15,7 +15,7 @@ the canonical core model.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import msgspec
 
@@ -71,7 +71,7 @@ class MatrixMetadataEnvelope:
             )
 
     @classmethod
-    def from_content(cls, content: dict) -> Optional[MatrixMetadataEnvelope]:
+    def from_content(cls, content: dict[str, Any]) -> Optional[MatrixMetadataEnvelope]:
         """Extract an envelope from a Matrix event content dict.
 
         Expects the ``content["medre"]["envelope"]`` subtree.  Returns
@@ -117,7 +117,7 @@ class MatrixMetadataEnvelope:
         except (TypeError, ValueError):
             return None
 
-    def to_content(self) -> dict:
+    def to_content(self) -> dict[str, Any]:
         """Serialise the envelope into a Matrix content subtree.
 
         Returns a dict suitable for merging into a Matrix event content

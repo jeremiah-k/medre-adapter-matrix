@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.config.adapters.matrix_credentials import write_credentials_json
@@ -212,7 +213,9 @@ def matrix_whoami(homeserver: str, access_token: str) -> str:
     if not user_id:
         raise MatrixConnectionError("Whoami response missing user_id")
 
-    return user_id
+    # Validation boundary: the whoami response body is dynamic JSON, and a
+    # truthy user_id is the server-asserted MXID string.
+    return cast(str, user_id)
 
 
 def matrix_logout(homeserver: str, access_token: str) -> None:
@@ -282,7 +285,9 @@ def discover_well_known(domain: str) -> str | None:
             url, timeout=5
         ) as resp:  # nosec: URL scheme is hardcoded to https://
             data = json.loads(resp.read())
-        return data["m.homeserver"]["base_url"]  # type: ignore[index]
+        # Validation boundary: the well-known document is dynamic JSON whose
+        # base_url is consumed as the homeserver string downstream.
+        return cast(str, data["m.homeserver"]["base_url"])
     except Exception:
         return None
 
@@ -306,7 +311,7 @@ def save_credentials_json(result: MatrixLoginResult, path: Path | None = None) -
     )
 
 
-def check_credentials_completeness(creds: dict) -> list[str]:
+def check_credentials_completeness(creds: dict[str, Any]) -> list[str]:
     """Return a list of missing required credential keys.
 
     Required keys are ``"homeserver"``, ``"access_token"``, and

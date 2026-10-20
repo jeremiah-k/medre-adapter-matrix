@@ -375,7 +375,7 @@ class MatrixSession:
         self._config = config
         self._clock = clock
         self._client: Any = None
-        self._sync_task: asyncio.Task | None = None
+        self._sync_task: asyncio.Task[None] | None = None
         self._sync_failure: Exception | None = None
         self._message_callback = message_callback
         self._admission_callback = admission_callback
@@ -1998,14 +1998,16 @@ class MatrixSession:
             )
         )
         self._room_key_request_tasks[key] = task
-        task.add_done_callback(
-            lambda done, request_key=key: self._discard_room_key_request_task(
-                request_key, done
-            )
-        )
+
+        def _on_room_key_request_done(
+            done: asyncio.Future[None], request_key: str = key
+        ) -> None:
+            self._discard_room_key_request_task(request_key, done)
+
+        task.add_done_callback(_on_room_key_request_done)
 
     def _discard_room_key_request_task(
-        self, request_key: str, task: asyncio.Task[None]
+        self, request_key: str, task: asyncio.Future[None]
     ) -> None:
         """Forget a completed Megolm recovery task without removing a replacement."""
         if self._room_key_request_tasks.get(request_key) is task:
@@ -2898,8 +2900,13 @@ class MatrixSession:
         import nio
 
         try:
-            return nio.crypto.attachments.decrypt_attachment(
-                ciphertext, key["k"], sha256_hash, iv
+            # Untyped pinned-SDK boundary: decrypt_attachment returns the
+            # plaintext bytes after verifying the ciphertext SHA-256.
+            return cast(
+                bytes,
+                nio.crypto.attachments.decrypt_attachment(
+                    ciphertext, key["k"], sha256_hash, iv
+                ),
             )
         except nio.EncryptionError as exc:
             raise MatrixMediaUnavailableError(
@@ -2940,13 +2947,14 @@ class MatrixSession:
             return data
 
         try:
-            return await self._client.upload(
+            response: tuple[Any, dict[str, Any] | None] = await self._client.upload(
                 _provider,
                 content_type=content_type,
                 filename=filename,
                 encrypt=encrypt,
                 filesize=len(data),
             )
+            return response
         except _RoomRateLimitIntercept as exc:
             return exc.response, None
 
