@@ -56,6 +56,7 @@ class _VerifiableIdentity(Protocol):
 _SendRequest = Callable[[str, str, str, dict[str, str]], Awaitable[_MatrixHttpResponse]]
 _EnsureCrossSigning = Callable[..., Awaitable[str]]
 _UploadDeviceSignature = Callable[[object], Awaitable[None]]
+_UploadKeys = Callable[[], Awaitable[object]]
 
 
 @dataclass(frozen=True)
@@ -492,6 +493,16 @@ class MatrixCrossSigningService:
             )
             return False
         try:
+            # A fresh session has no server device keys until its first sync.
+            # Reusing the account identity must not require rotating that identity
+            # merely to make the current device available for signature upload.
+            if getattr(self._client, "should_upload_keys", False) is True:
+                keys_upload = getattr(self._client, "keys_upload", None)
+                if not callable(keys_upload):
+                    raise RuntimeError("Matrix provider cannot upload device keys")
+                response = await cast(_UploadKeys, keys_upload)()
+                if response is None or getattr(response, "status_code", None):
+                    raise RuntimeError("Matrix device-key upload was rejected")
             await cast(_UploadDeviceSignature, upload)(identity)
         except asyncio.CancelledError:
             raise

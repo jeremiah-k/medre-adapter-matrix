@@ -460,3 +460,54 @@ async def test_diagnostics_never_include_tokens_or_key_material() -> None:
     assert identity.self_signing_public_key not in diagnostic_text
     assert "sig-master" not in diagnostic_text
     assert "sig-device" not in diagnostic_text
+
+
+async def test_new_device_uploads_keys_before_reusing_account_signing_identity() -> (
+    None
+):
+    identity = _identity()
+
+    class FreshDevice(FakeClient):
+        should_upload_keys = True
+
+        async def keys_upload(self):
+            self.should_upload_keys = False
+            self.server_payload = self._payload(identity, device_signed=False)
+            return type("KeysUploadResponse", (), {})()
+
+        async def _upload_own_device_signature(self, signing_identity):
+            if self.should_upload_keys:
+                raise RuntimeError("device keys must be uploaded before signing")
+            await super()._upload_own_device_signature(signing_identity)
+
+    client = FreshDevice(identity=identity, server_identity=True, device_signed=False)
+    client.server_payload["device_keys"] = {client.user_id: {}}
+    service = MatrixCrossSigningService(client)
+    assert (
+        await service.reconcile(password="pw", allow_bootstrap=True) == "device_signed"
+    )
+    assert client.cross_signing_identity is identity
+    assert client.ensure_calls == []
+    assert service.diagnostics().current_device_self_signed is True
+
+
+async def test_device_key_upload_failure_preserves_account_identity() -> None:
+    identity = _identity()
+
+    class RejectedUpload(FakeClient):
+        should_upload_keys = True
+
+        async def keys_upload(self):
+            return type("KeysUploadError", (), {"status_code": "M_FORBIDDEN"})()
+
+    client = RejectedUpload(
+        identity=identity, server_identity=True, device_signed=False
+    )
+    service = MatrixCrossSigningService(client)
+    assert await service.reconcile(allow_bootstrap=True) is None
+    assert client.cross_signing_identity is identity
+    assert client.ensure_calls == []
+    assert client.repair_calls == 0
+    assert (
+        service.diagnostics().last_failure_category == "device_signature_repair_failed"
+    )

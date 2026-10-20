@@ -202,3 +202,12 @@ Matrix output defaults to `[sender/origin]: message`, preserving the full sender
 name. An absent origin renders `[sender]: message`. Set `relay_prefix: ""` to
 disable attribution or supply a custom generic template. Omitted/null selects
 the automatic policy; MMRelay wire metadata keeps the original unprefixed text.
+
+
+## Device verification
+
+E2EE setup uses the adapter's persistent store and checks its own device's
+server-visible signing chain. A fresh device uploads its keys before reusing
+the account signing identity; ordinary login does not require rotating that
+identity. Keep the E2EE store when renewing credentials. A cross-signing reset
+replaces account identity material and can require verification in other clients.
