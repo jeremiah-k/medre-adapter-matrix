@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import getpass
 import sys
 from pathlib import Path
@@ -55,6 +54,32 @@ async def _adapter_matrix_auth_login(args: object) -> None:
             "target the runtime E2EE store.",
             file=sys.stderr,
         )
+        sys.exit(1)
+
+    if getattr(args, "oauth", False) is True:
+        from medre.adapters.matrix.oauth import MatrixOAuthError
+        from medre.adapters.matrix.oauth_cli import oauth_login
+
+        try:
+            await oauth_login(args)
+        except (MatrixOAuthError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except OSError:
+            print("Error: Matrix credential storage is unavailable.", file=sys.stderr)
+            sys.exit(1)
+        return
+    from medre.config.adapters.matrix_credentials import load_credentials_json
+
+    saved = load_credentials_json()
+    if saved and saved.get("auth_type") == "oauth":
+        print(
+            "Error: A managed OAuth session exists. Repeat login with --oauth, or use auth logout before changing login methods.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if getattr(args, "client_id", None):
+        print("Error: --client-id requires --oauth.", file=sys.stderr)
         sys.exit(1)
 
     # Step 2: Tristate dispatch ----------------------------------------------
@@ -179,57 +204,51 @@ async def _adapter_matrix_auth_login(args: object) -> None:
     try:
         result = matrix_login(homeserver, user_id, password)
 
-        whoami_user = matrix_whoami(result.homeserver, result.access_token)
+        try:
+            whoami_user = matrix_whoami(result.homeserver, result.access_token)
 
-        if whoami_user != user_id:
-            print(
-                f"Error: verified user_id {whoami_user!r} does not match "
-                f"requested {user_id!r}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            if whoami_user != user_id:
+                print(
+                    f"Error: verified user_id {whoami_user!r} does not match "
+                    f"requested {user_id!r}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
-        # Step 7: Optional E2EE identity bootstrap.  Basic auth remains
-        # stdlib-only unless an adapter store is explicitly selected.
-        cross_signing_result = None
-        if adapter_id:
-            from medre.adapters.matrix.e2ee_bootstrap import (
-                bootstrap_login_cross_signing,
-            )
+            # Step 7: Optional E2EE identity bootstrap.  Basic auth remains
+            # stdlib-only unless an adapter store is explicitly selected.
+            cross_signing_result = None
+            if adapter_id:
+                from medre.adapters.matrix.e2ee_bootstrap import (
+                    bootstrap_login_cross_signing,
+                )
 
-            def _invalidate_failed_session() -> None:
-                try:
-                    matrix_logout(result.homeserver, result.access_token)
-                except MatrixConnectionError as logout_exc:
-                    print(
-                        "Warning: failed to invalidate the Matrix session after "
-                        f"cross-signing setup failed: {logout_exc}",
-                        file=sys.stderr,
-                    )
-
-            try:
                 cross_signing_result = await bootstrap_login_cross_signing(
                     result,
                     password,
                     adapter_id=adapter_id,
                     reset=reset_cross_signing,
                 )
-            except asyncio.CancelledError:
-                _invalidate_failed_session()
-                raise
-            except Exception:
-                _invalidate_failed_session()
-                raise
 
-        # Step 8: Persist token/device credentials only after any requested
-        # cross-signing bootstrap has reached a verified postcondition.
-        creds_path = save_credentials_json(result)
+            # Step 8: Persist token/device credentials only after any requested
+            # cross-signing bootstrap has reached a verified postcondition.
+            creds_path = save_credentials_json(result)
+
+        except BaseException:
+            try:
+                matrix_logout(result.homeserver, result.access_token)
+            except MatrixConnectionError:
+                print(
+                    "Warning: revoke the unsuccessful Matrix login in account settings.",
+                    file=sys.stderr,
+                )
+            raise
 
     except MatrixConnectionError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-    except FileNotFoundError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+    except OSError:
+        print("Error: Matrix credential storage is unavailable.", file=sys.stderr)
         sys.exit(1)
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -295,6 +314,20 @@ async def _adapter_matrix_auth_status(credentials_path: Path | None = None) -> N
         f"{'✓ (present)' if creds.get('access_token') else '✗ missing'}"
     )
 
+    if creds.get("auth_type") == "oauth":
+        from medre.adapters.matrix.oauth import MatrixOAuthError, OAuthSession
+
+        try:
+            session = OAuthSession.parse(creds)
+            from datetime import datetime, timezone
+
+            print("Authentication: OAuth (automatically renewed by the bridge)")
+            print(
+                f"Token expires: {datetime.fromtimestamp(session.expires_at, timezone.utc).isoformat()}"
+            )
+        except (MatrixOAuthError, ValueError, OverflowError):
+            print("OAuth metadata is malformed; repair the saved session.")
+            return
     if missing:
         print(f"\nMissing: {', '.join(missing)}")
     else:
@@ -368,6 +401,14 @@ async def _adapter_matrix_provision(args: object) -> None:
     device_id = creds.get("device_id")
 
     try:
+        from medre.adapters.matrix.oauth_session import (
+            manager_for_credentials,
+            attach_oauth,
+        )
+
+        manager = manager_for_credentials(homeserver, user_id, device_id, access_token)
+        if manager is not None:
+            access_token = await manager.access_token()
         verified = matrix_whoami(homeserver, access_token)
         if verified != user_id:
             print(
@@ -381,6 +422,8 @@ async def _adapter_matrix_provision(args: object) -> None:
 
         client = nio.AsyncClient(homeserver, user_id, device_id=device_id)
         client.restore_login(user_id, device_id, access_token)
+        if manager is not None:
+            attach_oauth(client, manager)
         try:
             from medre.adapters.matrix.provision import (
                 provision_private_space_and_room,

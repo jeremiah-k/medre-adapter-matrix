@@ -242,6 +242,16 @@ def matrix_logout(homeserver: str, access_token: str) -> None:
             pass
         finally:
             exc.close()
+        try:
+            payload = json.loads(detail)
+        except ValueError:
+            payload = None
+        if (
+            exc.code == 401
+            and isinstance(payload, dict)
+            and payload.get("errcode") == "M_UNKNOWN_TOKEN"
+        ):
+            return
         raise MatrixConnectionError(
             f"Logout failed (HTTP {exc.code}): {detail}"
         ) from exc
@@ -300,15 +310,37 @@ def save_credentials_json(result: MatrixLoginResult, path: Path | None = None) -
 
     Returns the :class:`Path` that was written.
     """
-    return write_credentials_json(
-        {
-            "homeserver": result.homeserver,
-            "access_token": result.access_token,
-            "user_id": result.user_id,
-            "device_id": result.device_id,
-        },
-        path=path,
+    from medre.adapters.matrix.oauth_session import credential_lock
+    from medre.config.adapters.matrix_credentials import (
+        get_credentials_path,
+        load_credentials_json,
     )
+
+    target = path if path is not None else get_credentials_path()
+    from medre.adapters.matrix.oauth import MatrixOAuthError
+
+    try:
+        with credential_lock(target):
+            existing = load_credentials_json(target)
+            if target.exists() and existing is None:
+                raise MatrixConnectionError(
+                    "Existing Matrix credentials are unreadable; preserve them before recovery."
+                )
+            if existing and existing.get("auth_type") == "oauth":
+                raise MatrixConnectionError(
+                    "Use OAuth logout before changing credential methods."
+                )
+            return write_credentials_json(
+                {
+                    "homeserver": result.homeserver,
+                    "access_token": result.access_token,
+                    "user_id": result.user_id,
+                    "device_id": result.device_id,
+                },
+                path=target,
+            )
+    except MatrixOAuthError as exc:
+        raise MatrixConnectionError(str(exc)) from None
 
 
 def check_credentials_completeness(creds: dict[str, Any]) -> list[str]:
@@ -321,4 +353,8 @@ def check_credentials_completeness(creds: dict[str, Any]) -> list[str]:
     return list means the credentials are complete.
     """
     required = ("homeserver", "access_token", "user_id")
-    return [key for key in required if not creds.get(key)]
+    return [
+        key
+        for key in required
+        if not isinstance(creds.get(key), str) or not creds[key].strip()
+    ]

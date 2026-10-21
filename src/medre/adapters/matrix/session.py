@@ -45,6 +45,11 @@ from medre.adapters.matrix.identity import (
     MatrixCrossSigningDiagnostics,
     MatrixCrossSigningService,
 )
+from medre.adapters.matrix.oauth_session import (
+    OAuthSessionManager,
+    attach_oauth,
+    manager_for_credentials,
+)
 from medre.config.adapters.matrix import MatrixConfig
 from medre.core.ingress import INGRESS_PROVENANCE_VALUES, IngressProvenance
 from medre.core.ingress.types import DurableIngressDeferredError
@@ -301,6 +306,7 @@ class MatrixSession:
         "_config",
         "_clock",
         "_client",
+        "_oauth_manager",
         "_sync_task",
         "_sync_failure",
         "_message_callback",
@@ -442,6 +448,7 @@ class MatrixSession:
         # Cross-signing is a separate identity policy component.  The session
         # owns its runtime lifetime but never supplies a password or permits
         # master/self-signing bootstrap or rotation during ordinary startup.
+        self._oauth_manager: OAuthSessionManager | None = None
         self._cross_signing_service: MatrixCrossSigningService | None = None
         self._cross_signing_diagnostics = MatrixCrossSigningDiagnostics()
 
@@ -750,6 +757,18 @@ class MatrixSession:
                 )
         return config
 
+    def _attach_managed_auth(self) -> None:
+        if self._oauth_manager is None:
+            self._oauth_manager = manager_for_credentials(
+                self._config.homeserver,
+                self._config.user_id,
+                self._config.device_id,
+                self._config.access_token,
+                managed_source=self._config.oauth_sidecar_token,
+            )
+        if self._oauth_manager is not None:
+            attach_oauth(self._client, self._oauth_manager)
+
     async def _start_plaintext(self) -> None:
         """Standard plaintext startup — no explicit crypto.
 
@@ -770,6 +789,7 @@ class MatrixSession:
             store_path=self._config.store_path,
             config=client_config,
         )
+        self._attach_managed_auth()
         # Discover the actual device_id from the authenticated session
         device_id = await self._discover_device_id()
         self._client.restore_login(
@@ -826,6 +846,7 @@ class MatrixSession:
             config=client_config,
         )
 
+        self._attach_managed_auth()
         # Discover device_id via whoami() if not known.
         if not device_id:
             device_id = await self._discover_device_id()

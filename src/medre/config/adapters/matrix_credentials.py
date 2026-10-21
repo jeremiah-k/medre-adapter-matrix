@@ -11,7 +11,9 @@ code may import them from here.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -43,8 +45,12 @@ def load_credentials_json(path: Path | None = None) -> dict[str, Any] | None:
     if not target.exists():
         return None
     try:
-        data: dict[str, Any] = json.loads(target.read_text(encoding="utf-8"))
-        return data
+        with target.open("rb") as stream:
+            raw = stream.read(65537)
+        if len(raw) > 65536:
+            return None
+        data: object = json.loads(raw)
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 
@@ -60,12 +66,39 @@ def write_credentials_json(
     Creates parent directories if they don't exist.
     Returns the path that was written.
     """
-    import stat
+    import tempfile
 
     target = path if path is not None else get_credentials_path()
-    os.makedirs(target.parent, exist_ok=True)
-    target.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)  # 0o600
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    encoded = json.dumps(dict(data), indent=2, allow_nan=False)
+    if len(encoded.encode("utf-8")) > 65536:
+        raise OSError("Matrix credential record exceeds the size limit")
+    descriptor, temporary = tempfile.mkstemp(prefix=".matrix-", dir=target.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+        if sys.platform != "win32":
+            # The new record is already published. Failure to sync the parent
+            # directory must not cause callers to revoke its live tokens.
+            try:
+                directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except OSError:
+                logging.getLogger(__name__).debug(
+                    "Matrix credentials published; parent-directory sync unavailable"
+                )
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
     return target
 
 

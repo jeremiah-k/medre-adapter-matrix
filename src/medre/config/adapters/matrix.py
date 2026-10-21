@@ -27,6 +27,14 @@ _VALID_METADATA_EMBEDDING_MODES: frozenset[str] = frozenset(
 )
 
 
+class _OAuthSidecarToken(str):
+    """Credential text whose renewal authority came from sidecar fallback.
+
+    Keeping provenance on the value preserves it through configuration copies,
+    but replacing the token with an explicit override discards that authority.
+    """
+
+
 @dataclass(frozen=True)
 class MatrixConfig:
     """Immutable configuration for a :class:`~medre.adapters.matrix.adapter.MatrixAdapter`.
@@ -99,6 +107,11 @@ class MatrixConfig:
     origin_label: str = ""
     relay_prefix: str | None = None
 
+    @property
+    def oauth_sidecar_token(self) -> bool:
+        """Whether the current token was supplied by managed OAuth fallback."""
+        return isinstance(self.access_token, _OAuthSidecarToken)
+
     def validate(self) -> MatrixConfig:
         """Validate the configuration and return it for chaining.
 
@@ -150,6 +163,10 @@ class MatrixConfig:
             overrides["user_id"] = creds["user_id"]
         if needs_access_token and creds.get("access_token"):
             overrides["access_token"] = creds["access_token"]
+            if creds.get("auth_type") == "oauth" and isinstance(
+                creds["access_token"], str
+            ):
+                overrides["access_token"] = _OAuthSidecarToken(creds["access_token"])
 
         if self.device_id is None:
             device_id_val = creds.get("device_id")
