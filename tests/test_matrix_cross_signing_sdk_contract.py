@@ -105,6 +105,9 @@ async def test_real_crypto_store_reuses_account_identity_for_fresh_device(tmp_pa
             return json.dumps(self.document)
 
     async def send(method, path, data=None, headers=None, *args, **kwargs):
+        from urllib.parse import urlsplit
+
+        path = urlsplit(path).path
         calls.append(path)
         body = json.loads(data) if data else {}
         if path.endswith("/keys/query"):

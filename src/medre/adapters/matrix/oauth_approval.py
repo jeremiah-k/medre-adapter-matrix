@@ -99,7 +99,11 @@ def signing_approval(
         timeout: float | None = None,
     ) -> Any:
         response = await original(method, path, data, headers, trace_context, timeout)
-        if method != "POST" or path != _UPLOAD_PATH or response.status == 200:
+        if (
+            method != "POST"
+            or urlsplit(path).path != _UPLOAD_PATH
+            or response.status == 200
+        ):
             return response
         if response.status != 401:
             raise MatrixOAuthError("Signing-key upload was rejected.")
@@ -109,6 +113,8 @@ def signing_approval(
         display("Keep this command running until approval completes.")
         try:
             document = json.loads(data)
+            if not isinstance(document, dict):
+                raise ValueError
             document["auth"] = {"session": session}
         except (TypeError, ValueError):
             raise MatrixOAuthError("The signing-key request is malformed.") from None
@@ -117,19 +123,31 @@ def signing_approval(
             await sleep(min(5.0, max(0.0, deadline - clock())))
             if clock() >= deadline:
                 break
-            async with asyncio.timeout(deadline - clock()):
-                response = await original(
-                    method, path, json.dumps(document), headers, trace_context, timeout
-                )
-            if response.status == 200:
-                return response
-            if response.status != 401 or await _read_challenge(response, issuer) != (
-                session,
-                url,
-            ):
+            try:
+                async with asyncio.timeout(deadline - clock()):
+                    response = await original(
+                        method,
+                        path,
+                        json.dumps(document),
+                        headers,
+                        trace_context,
+                        timeout,
+                    )
+                    if response.status == 200:
+                        return response
+                    if response.status != 401 or await _read_challenge(
+                        response, issuer
+                    ) != (
+                        session,
+                        url,
+                    ):
+                        raise MatrixOAuthError(
+                            "Signing authorization changed or was rejected; retry."
+                        )
+            except TimeoutError:
                 raise MatrixOAuthError(
-                    "Signing authorization changed or was rejected; retry."
-                )
+                    "Signing approval timed out; repeat login to resume the saved session."
+                ) from None
         raise MatrixOAuthError(
             "Signing approval expired; repeat login to resume the saved session."
         )

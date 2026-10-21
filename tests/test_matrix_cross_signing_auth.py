@@ -77,7 +77,10 @@ async def test_bootstrap_prepares_runtime_store_and_verifies_identity(
     observed: dict[str, object] = {}
 
     class FakeService:
-        def __init__(self, provider: object, *, logger=None) -> None:
+        def __init__(
+            self, provider: object, *, logger=None, operation_timeout_seconds: float
+        ) -> None:
+            assert operation_timeout_seconds == 120.0
             observed["provider"] = provider
 
         async def reconcile(self, **kwargs: object) -> str:
@@ -145,8 +148,10 @@ async def test_bootstrap_restricts_existing_store_and_closes_database(
     store_path.chmod(0o755)
 
     class FakeService:
-        def __init__(self, provider: object, *, logger=None) -> None:
-            pass
+        def __init__(
+            self, provider: object, *, logger=None, operation_timeout_seconds: float
+        ) -> None:
+            assert operation_timeout_seconds == 120.0
 
         async def reconcile(self, **kwargs: object) -> str:
             return "already_signed"
@@ -181,8 +186,10 @@ async def test_bootstrap_propagates_explicit_reset_to_policy(
     observed: dict[str, object] = {}
 
     class FakeService:
-        def __init__(self, provider: object, *, logger=None) -> None:
-            pass
+        def __init__(
+            self, provider: object, *, logger=None, operation_timeout_seconds: float
+        ) -> None:
+            assert operation_timeout_seconds == 120.0
 
         async def reconcile(self, **kwargs: object) -> str:
             observed.update(kwargs)
@@ -456,3 +463,24 @@ async def test_basic_login_without_adapter_id_remains_sdk_free(tmp_path: Path) -
         patch("builtins.__import__", side_effect=guarded_import),
     ):
         await _adapter_matrix_auth_login(args)
+
+
+async def test_bootstrap_constructor_error_excludes_provider_details(
+    tmp_path, monkeypatch
+):
+    import medre.adapters.matrix.e2ee_bootstrap as module
+
+    nio = _FakeNioModule(_FakeBootstrapClient())
+    monkeypatch.setattr(
+        nio, "AsyncClient", MagicMock(side_effect=ValueError("PRIVATE_TOKEN"))
+    )
+    monkeypatch.setitem(sys.modules, "nio", nio)
+    monkeypatch.setattr(module._compat_mod, "HAS_NIO", True)
+    monkeypatch.setattr(module._compat_mod, "HAS_E2EE", True)
+    monkeypatch.setattr(module, "matrix_store_path_for_adapter", lambda _: tmp_path)
+    with pytest.raises(MatrixConnectionError, match="ValueError") as error:
+        await bootstrap_login_cross_signing(
+            _login_result(), "password", adapter_id="matrix"
+        )
+    assert "PRIVATE_TOKEN" not in str(error.value)
+    assert error.value.__suppress_context__ is True

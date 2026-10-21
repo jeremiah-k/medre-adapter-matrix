@@ -17,6 +17,7 @@ from medre.adapters.matrix.oauth import (
     OAuthSession,
     matches_user,
 )
+from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.oauth_session import (
     OAuthSessionManager,
     credential_lock,
@@ -54,6 +55,10 @@ async def oauth_login(args: Any) -> None:
                 "Credentials are unreadable; preserve the file and repair it before login."
             )
         if record is not None:
+            if record.get("auth_type") != "oauth":
+                raise MatrixOAuthError(
+                    "Saved password credentials exist; use auth logout before switching to --oauth."
+                )
             session = OAuthSession.parse(record)
             if not matches_user(session.user_id, expected):
                 raise MatrixOAuthError(
@@ -125,6 +130,12 @@ async def oauth_login(args: Any) -> None:
             reset=getattr(args, "reset_cross_signing", False),
             oauth_manager=manager,
         )
+    except (MatrixConnectionError, MatrixOAuthError) as exc:
+        raise MatrixOAuthError(
+            "OAuth credentials are retained, but own-device signing did not "
+            f"complete: {exc}. Correct the cause and repeat --oauth with the "
+            "same --adapter-id."
+        ) from None
     except Exception:
         # Keep the authenticated session and private identity material. Retrying
         # signing must not require another device login or an identity rotation.

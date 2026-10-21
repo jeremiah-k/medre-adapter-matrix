@@ -13,7 +13,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 API_SCOPE = "urn:matrix:client:api:*"
@@ -114,6 +114,7 @@ class OAuthTransport(Protocol):
         form: Mapping[str, str] | None = None,
         document: Mapping[str, Any] | None = None,
         token: str | None = None,
+        follow_redirects: bool = False,
     ) -> OAuthResponse: ...
 
 
@@ -126,49 +127,96 @@ class OAuthHTTP:
         form: Mapping[str, str] | None = None,
         document: Mapping[str, Any] | None = None,
         token: str | None = None,
+        follow_redirects: bool = False,
     ) -> OAuthResponse:
         import json
         import aiohttp
 
         https_url(url)
+        if follow_redirects and (
+            method != "GET"
+            or urlsplit(url).path != "/.well-known/matrix/client"
+            or token is not None
+            or form is not None
+            or document is not None
+        ):
+            raise MatrixOAuthError(
+                "Redirects are allowed only for credential-free client discovery."
+            )
         try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as session:
-                async with session.request(
-                    method,
-                    url,
-                    data=form,
-                    json=document,
-                    allow_redirects=False,
-                    headers={"Authorization": f"Bearer {token}"} if token else None,
-                ) as response:
-                    raw = bytearray()
-                    async for chunk in response.content.iter_chunked(8192):
-                        raw.extend(chunk)
-                        if len(raw) > MAX_RESPONSE_BYTES:
-                            raise MatrixOAuthError(
-                                "OAuth response exceeds the size limit."
-                            )
-                    if response.status in (301, 302, 303, 307, 308):
-                        raise MatrixOAuthError("OAuth endpoint redirects are refused.")
-                    if not raw and response.status in (200, 404):
-                        body: object = {}
-                    else:
-                        try:
-                            body = json.loads(raw)
-                        except (ValueError, UnicodeDecodeError):
-                            if response.status >= 400:
-                                body = {}
-                            else:
+            async with (
+                asyncio.timeout(30),
+                aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as session,
+            ):
+                redirects = 0
+                while True:
+                    async with session.request(
+                        method,
+                        url,
+                        data=form,
+                        json=document,
+                        allow_redirects=False,
+                        headers={"Authorization": f"Bearer {token}"} if token else None,
+                    ) as response:
+                        if response.status in (301, 302, 303, 307, 308):
+                            if not follow_redirects:
                                 raise MatrixOAuthError(
-                                    "OAuth endpoint returned invalid JSON."
+                                    "OAuth endpoint redirects are refused."
+                                )
+                            if redirects >= 5:
+                                raise MatrixOAuthError(
+                                    "Client discovery exceeded the redirect limit."
+                                )
+                            location = response.headers.get("Location")
+                            if not isinstance(location, str) or not location:
+                                raise MatrixOAuthError(
+                                    "Client discovery redirect has no destination."
+                                )
+                            try:
+                                if (
+                                    any(
+                                        ord(char) <= 32 or ord(char) == 127
+                                        for char in location
+                                    )
+                                    or "\\" in location
+                                ):
+                                    raise ValueError
+                                target = urljoin(url, location)
+                                parsed = urlsplit(target)
+                                https_url(urlunsplit(parsed._replace(query="")))
+                            except ValueError:
+                                raise MatrixOAuthError(
+                                    "Invalid client discovery redirect URL."
                                 ) from None
-                    if not isinstance(body, dict):
-                        raise MatrixOAuthError(
-                            "OAuth endpoint must return a JSON object."
-                        )
-                    return OAuthResponse(response.status, body)
+                            url = target
+                            redirects += 1
+                            continue
+                        raw = bytearray()
+                        async for chunk in response.content.iter_chunked(8192):
+                            raw.extend(chunk)
+                            if len(raw) > MAX_RESPONSE_BYTES:
+                                raise MatrixOAuthError(
+                                    "OAuth response exceeds the size limit."
+                                )
+                        if not raw and response.status in (200, 404):
+                            body: object = {}
+                        else:
+                            try:
+                                body = json.loads(raw)
+                            except (ValueError, UnicodeDecodeError):
+                                if response.status >= 400:
+                                    body = {}
+                                else:
+                                    raise MatrixOAuthError(
+                                        "OAuth endpoint returned invalid JSON."
+                                    ) from None
+                        if not isinstance(body, dict):
+                            raise MatrixOAuthError(
+                                "OAuth endpoint must return a JSON object."
+                            )
+                        return OAuthResponse(response.status, body)
         except (aiohttp.ClientError, TimeoutError):
             raise OAuthNetworkError(
                 "OAuth request failed; check connectivity and retry."
@@ -292,7 +340,9 @@ class MatrixOAuthClient:
         server = https_url(_normalize_homeserver(homeserver))
         parts = urlsplit(server)
         discovery = await self.transport.request(
-            "GET", f"https://{parts.netloc}/.well-known/matrix/client"
+            "GET",
+            f"https://{parts.netloc}/.well-known/matrix/client",
+            follow_redirects=True,
         )
         if discovery.status == 200:
             delegated = discovery.body.get("m.homeserver")
@@ -501,17 +551,29 @@ class MatrixOAuthClient:
             )
         except BaseException:
             await self._revoke_tokens(
-                response, session.revocation_endpoint, session.client_id
+                response,
+                session.revocation_endpoint,
+                session.client_id,
+                previous=session,
             )
             raise
 
     async def _revoke_tokens(
-        self, tokens: Mapping[str, Any], endpoint: str, client_id: str
+        self,
+        tokens: Mapping[str, Any],
+        endpoint: str,
+        client_id: str,
+        *,
+        previous: OAuthSession | None = None,
     ) -> None:
         # Cleanup is bounded and never replaces the original failure.
         for name in ("refresh_token", "access_token"):
             token = tokens.get(name)
-            if isinstance(token, str) and token:
+            if (
+                isinstance(token, str)
+                and token
+                and (previous is None or token != getattr(previous, name))
+            ):
                 try:
                     await self.transport.request(
                         "POST",
@@ -524,6 +586,20 @@ class MatrixOAuthClient:
                     )
                 except Exception:
                     pass
+
+    async def revoke_unpersisted(
+        self, session: OAuthSession, previous: OAuthSession
+    ) -> None:
+        """Best-effort cleanup without explicitly revoking saved token values."""
+        await self._revoke_tokens(
+            {
+                "refresh_token": session.refresh_token,
+                "access_token": session.access_token,
+            },
+            session.revocation_endpoint,
+            session.client_id,
+            previous=previous,
+        )
 
     async def revoke(self, session: OAuthSession) -> None:
         for name in ("refresh_token", "access_token"):

@@ -10,8 +10,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -28,6 +28,14 @@ from medre.config.adapters.matrix_credentials import (
 )
 
 _Result = TypeVar("_Result")
+
+
+def _record_stamp(path: Path) -> tuple[int, int, int, int] | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
 
 
 async def finish_rotation(task: asyncio.Task[_Result]) -> _Result:
@@ -73,6 +81,37 @@ def credential_lock(path: Path) -> Iterator[None]:
             raise MatrixOAuthError(
                 "Matrix credentials are in use by another operation; retry shortly."
             ) from None
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                import msvcrt
+
+                try:
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    # Closing the descriptor remains the cleanup fallback.
+                    pass
+
+
+@asynccontextmanager
+async def credential_lock_async(
+    path: Path, *, timeout_seconds: float = 45.0
+) -> AsyncIterator[None]:
+    """Wait for another owner's rotation without blocking the event loop."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    with ExitStack() as stack:
+        while True:
+            try:
+                stack.enter_context(credential_lock(path))
+                break
+            except MatrixOAuthError:
+                if loop.time() >= deadline:
+                    raise
+                await asyncio.sleep(min(0.1, deadline - loop.time()))
+        # Errors inside the protected operation must not trigger a reacquire.
         yield
 
 
@@ -87,10 +126,25 @@ class OAuthSessionManager:
         self.path = path
         self.protocol = protocol or MatrixOAuthClient()
         self._lock = asyncio.Lock()
+        # The supplied session may predate a cross-process replacement. Only
+        # cache a token after reading its record under the credentials lock.
+        self._stamp: tuple[int, int, int, int] | None = None
 
     async def access_token(self) -> str:
+        if (
+            self.protocol.clock() < self.session.refresh_at
+            and self._stamp is not None
+            and self._stamp == _record_stamp(self.path)
+        ):
+            return self.session.access_token
         async with self._lock:
-            with credential_lock(self.path):
+            if (
+                self.protocol.clock() < self.session.refresh_at
+                and self._stamp is not None
+                and self._stamp == _record_stamp(self.path)
+            ):
+                return self.session.access_token
+            async with credential_lock_async(self.path):
                 record = load_credentials_json(self.path)
                 if record is None:
                     raise MatrixOAuthError(
@@ -118,6 +172,7 @@ class OAuthSessionManager:
                     self.session = await finish_rotation(
                         asyncio.create_task(self._renew(saved))
                     )
+                self._stamp = _record_stamp(self.path)
                 return self.session.access_token
 
     async def _renew(self, session: OAuthSession) -> OAuthSession:
@@ -131,7 +186,7 @@ class OAuthSessionManager:
             write_credentials_json(refreshed.credentials(), self.path)
         except OSError:
             try:
-                await self.protocol.revoke(refreshed)
+                await self.protocol.revoke_unpersisted(refreshed, session)
             except MatrixOAuthError:
                 pass
             raise MatrixOAuthError(
@@ -147,23 +202,32 @@ def manager_for_credentials(
     access_token: str,
     *,
     path: Path | None = None,
+    managed_source: bool = False,
 ) -> OAuthSessionManager | None:
-    """Select a managed sidecar only when it supplied these exact credentials."""
+    """Find the managed identity even if its token rotated since config loading."""
     path = path or get_credentials_path()
     data = load_credentials_json(path)
+    if not managed_source and (
+        data is None or data.get("access_token") != access_token
+    ):
+        # An unrelated sidecar must not affect deliberately supplied tokens,
+        # including when its OAuth record is malformed.
+        return None
     if (
         not data
         or data.get("auth_type") != "oauth"
         or not isinstance(data.get("homeserver"), str)
+        or (data["homeserver"].rstrip("/"), data.get("user_id"))
+        != (homeserver.rstrip("/"), user_id)
     ):
-        return None
-    if (
-        data.get("homeserver", "").rstrip("/"),
-        data.get("user_id"),
-        data.get("access_token"),
-    ) != (homeserver.rstrip("/"), user_id, access_token):
+        if managed_source:
+            raise MatrixOAuthError(
+                "Managed OAuth credentials are missing or changed; authenticate again."
+            )
         return None
     session = OAuthSession.parse(data)
+    if device_id is None and managed_source:
+        raise MatrixOAuthError("Managed OAuth credentials require a Matrix device ID.")
     if device_id is not None and session.device_id != device_id:
         raise MatrixOAuthError(
             "Configured Matrix device differs from its OAuth credentials."

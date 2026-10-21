@@ -55,3 +55,27 @@ def test_private_permissions_apply_before_credentials_are_published(
     monkeypatch.setattr(os, "replace", check)
     write_credentials_json({"access_token": "secret"}, path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_directory_sync_failure_after_replace_does_not_revoke_published_token(
+    tmp_path, monkeypatch, caplog
+):
+    if os.name == "nt":
+        pytest.skip("Directory fsync applies only on POSIX")
+    path = tmp_path / "matrix.json"
+    original = os.fsync
+    calls = []
+
+    def fsync(fd):
+        calls.append(fd)
+        if len(calls) == 2:
+            raise OSError("directory sync unavailable PRIVATE_TOKEN")
+        return original(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    caplog.set_level("DEBUG", logger="medre.config.adapters.matrix_credentials")
+    write_credentials_json({"access_token": "still-valid"}, path)
+    assert "parent-directory sync unavailable" in caplog.text
+    assert "PRIVATE_TOKEN" not in caplog.text
+    assert load_credentials_json(path) == {"access_token": "still-valid"}
+    assert len(calls) == 2

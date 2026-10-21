@@ -764,6 +764,7 @@ class MatrixSession:
                 self._config.user_id,
                 self._config.device_id,
                 self._config.access_token,
+                managed_source=self._config.oauth_sidecar_token,
             )
         if self._oauth_manager is not None:
             attach_oauth(self._client, self._oauth_manager)

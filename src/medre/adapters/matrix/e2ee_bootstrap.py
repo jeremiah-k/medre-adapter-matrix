@@ -90,7 +90,9 @@ async def bootstrap_login_cross_signing(
             config=client_config,
         )
     except Exception as exc:
-        raise MatrixConnectionError(f"Failed to configure Matrix E2EE: {exc}") from exc
+        raise MatrixConnectionError(
+            f"Failed to configure Matrix E2EE ({type(exc).__name__})"
+        ) from None
 
     try:
         token = login.access_token
@@ -126,7 +128,11 @@ async def bootstrap_login_cross_signing(
                 "Matrix E2EE bootstrap could not initialize the crypto store"
             )
 
-        service = MatrixCrossSigningService(client, logger=logger)
+        service = MatrixCrossSigningService(
+            client,
+            logger=logger,
+            operation_timeout_seconds=300.0 if oauth_manager is not None else 120.0,
+        )
         authorization = (
             {"oauth_authenticated": True} if oauth_manager is not None else {}
         )
@@ -155,5 +161,5 @@ async def bootstrap_login_cross_signing(
             await close_matrix_client(client, logger)
         except Exception:
             (logger or logging.getLogger(__name__)).debug(
-                "Matrix E2EE bootstrap client close failed", exc_info=True
+                "Matrix E2EE bootstrap client close failed"
             )

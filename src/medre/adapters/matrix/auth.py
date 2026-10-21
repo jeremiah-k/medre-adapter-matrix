@@ -242,6 +242,16 @@ def matrix_logout(homeserver: str, access_token: str) -> None:
             pass
         finally:
             exc.close()
+        try:
+            payload = json.loads(detail)
+        except ValueError:
+            payload = None
+        if (
+            exc.code == 401
+            and isinstance(payload, dict)
+            and payload.get("errcode") == "M_UNKNOWN_TOKEN"
+        ):
+            return
         raise MatrixConnectionError(
             f"Logout failed (HTTP {exc.code}): {detail}"
         ) from exc

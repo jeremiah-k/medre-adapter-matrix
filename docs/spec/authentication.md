@@ -17,9 +17,11 @@ authenticated recovery. Local-only trust flags are not server verification.
 
 `auth login --oauth` MUST use the Matrix OAuth scopes and RFC 8628 device
 authorization flow. Discovery MUST follow Matrix homeserver delegation and
-validate HTTPS metadata before client registration. Device and token endpoints,
-revocation endpoints, and displayed approval addresses MUST belong to the
-advertised issuer. Endpoint redirects MUST NOT carry credentials elsewhere.
+validate HTTPS metadata before client registration. Credential-free client
+well-known discovery MAY follow up to five HTTPS redirects under one total
+deadline. Redirect following MUST NOT accept credentials or request bodies.
+Device and token endpoints, revocation endpoints, and displayed approval
+addresses MUST belong to the advertised issuer. Endpoint redirects MUST NOT carry credentials elsewhere.
 An explicitly registered public client ID MAY replace dynamic registration.
 
 The accepted token MUST have the requested API/device scopes and a renewable
@@ -34,13 +36,31 @@ be atomic and private; invalid or oversized records MUST NOT replace a usable
 record. Token renewal MUST serialize across tasks and processes, reload the
 latest saved token before rotation, and finish durable publication before
 propagating cancellation. Failed persistence MUST revoke the unpersisted result
-where possible. A revoked or changed session MUST NOT be replaced implicitly.
+where possible. Cleanup MUST NOT explicitly revoke token values retained by
+the saved session, including when the issuer omits a replacement refresh token.
+Authorization servers can invalidate related tokens under RFC 7009, so cleanup
+does not guarantee that a saved grant remains usable. A revoked or changed
+session MUST NOT be replaced implicitly. Platform-specific credential locks
+MUST be released before closing their descriptors, including cancellation
+cleanup.
 
 Runtime MUST attach renewal before the SDK's HTTP attempt boundary, including
 SDK-managed retries. Requests MUST use the configured HTTPS homeserver and
 relative paths, replace stale Authorization headers, remove query tokens, and
 reject custom Authorization overrides. Only the sidecar that supplied the
-configured credentials may become their renewal authority.
+configured credentials may become their renewal authority. Explicitly configured
+tokens must still match the current sidecar token; configurations populated by
+sidecar fallback retain their source provenance so a restarted session can
+follow a refreshed token without taking ownership of an unrelated token.
+Replacing a sidecar-supplied token with an explicit override MUST discard its
+managed-session provenance. Managed credentials that disappear or change identity
+before startup MUST NOT silently become unmanaged tokens. The initial cached
+session MUST be loaded under the same lock used for credential rotation.
+Cached access tokens MUST be invalidated if the sidecar is replaced or removed.
+Browser signing approval MUST receive a larger reconciliation budget than its
+approval window. Approval retries MUST bound HTTP requests and response-body
+reads by the same deadline. Directory-sync failures after atomic credential
+publication MUST NOT be misreported as unpublished tokens.
 
 Signing setup MAY handle a browser UIA challenge for a signing-key upload that
 the identity policy has permitted. First bootstrap MAY request browser approval

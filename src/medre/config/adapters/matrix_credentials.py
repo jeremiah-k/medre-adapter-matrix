@@ -11,6 +11,7 @@ code may import them from here.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from collections.abc import Mapping
@@ -80,11 +81,18 @@ def write_credentials_json(
             os.fsync(stream.fileno())
         os.replace(temporary, target)
         if sys.platform != "win32":
-            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            # The new record is already published. Failure to sync the parent
+            # directory must not cause callers to revoke its live tokens.
             try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+                directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except OSError:
+                logging.getLogger(__name__).debug(
+                    "Matrix credentials published; parent-directory sync unavailable"
+                )
     finally:
         try:
             os.unlink(temporary)

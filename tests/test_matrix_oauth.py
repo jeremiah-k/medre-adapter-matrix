@@ -244,8 +244,8 @@ class RenewingClient(MatrixOAuthClient):
             expires_at=2800.0,
         )
 
-    async def revoke(self, previous):
-        self.revoked.append(previous)
+    async def revoke_unpersisted(self, refreshed, previous):
+        self.revoked.append(refreshed)
 
 
 async def test_concurrent_refreshes_persist_one_rotation_and_reload_shared_state(
@@ -367,10 +367,31 @@ async def test_sdk_transport_rejects_foreign_paths_before_token_access(path):
     original.assert_not_awaited()
 
 
-def test_manager_only_selects_the_sidecar_that_supplied_credentials(tmp_path):
+def test_manager_recovers_rotated_token_from_matching_sidecar_identity(tmp_path):
     path = tmp_path / "matrix.json"
     saved = make_session()
     write_credentials_json(saved.credentials(), path)
+    assert (
+        manager_for_credentials(
+            saved.homeserver,
+            saved.user_id,
+            saved.device_id,
+            "stale-config-token",
+            path=path,
+            managed_source=True,
+        )
+        is not None
+    )
+    assert (
+        manager_for_credentials(
+            saved.homeserver,
+            saved.user_id,
+            saved.device_id,
+            saved.access_token,
+            path=path,
+        )
+        is not None
+    )
     assert (
         manager_for_credentials(
             saved.homeserver,
@@ -385,7 +406,7 @@ def test_manager_only_selects_the_sidecar_that_supplied_credentials(tmp_path):
         manager_for_credentials(
             saved.homeserver,
             saved.user_id,
-            saved.device_id,
+            None,
             saved.access_token,
             path=path,
         )
@@ -488,3 +509,64 @@ def test_saved_oauth_envelope_matches_published_schema():
     saved = make_session()
     jsonschema.validate(saved.credentials(), schema)
     assert OAuthSession.parse(saved.credentials()) == saved
+
+
+@pytest.mark.parametrize("reuse_refresh", [False, True])
+@pytest.mark.parametrize("reuse_access", [False, True])
+async def test_failed_refresh_save_excludes_persisted_tokens_from_revocation(
+    tmp_path, monkeypatch, reuse_refresh, reuse_access
+):
+    import medre.adapters.matrix.oauth_session as module
+
+    previous = make_session()
+    path = tmp_path / "matrix.json"
+    write_credentials_json(previous.credentials(), path)
+    issued = {
+        "access_token": previous.access_token if reuse_access else "ISSUED_ACCESS",
+        "refresh_token": previous.refresh_token if reuse_refresh else "ISSUED_REFRESH",
+        "token_type": "Bearer",
+        "expires_in": 100,
+    }
+    transport = ScriptedHTTP(
+        [OAuthResponse(200, issued), OAuthResponse(200, {}), OAuthResponse(200, {})]
+    )
+    manager = OAuthSessionManager(
+        previous, path, MatrixOAuthClient(transport, clock=lambda: 1900)
+    )
+    monkeypatch.setattr(
+        module,
+        "write_credentials_json",
+        lambda *args: (_ for _ in ()).throw(OSError("disk failure")),
+    )
+    with pytest.raises(MatrixOAuthError, match="could not be saved"):
+        await manager.access_token()
+    revoked = {
+        (req[2]["form"]["token_type_hint"], req[2]["form"]["token"])
+        for req in transport.requests[1:]
+    }
+    expected = {
+        (name, issued[name])
+        for name in ("refresh_token", "access_token")
+        if issued[name] != getattr(previous, name)
+    }
+    assert revoked == expected
+    assert load_credentials_json(path) == previous.credentials()
+
+
+async def test_invalid_refresh_response_does_not_explicitly_revoke_retained_tokens():
+    previous = make_session()
+    transport = ScriptedHTTP(
+        [
+            OAuthResponse(
+                200,
+                {
+                    "access_token": previous.access_token,
+                    "refresh_token": previous.refresh_token,
+                    "token_type": "invalid",
+                },
+            )
+        ]
+    )
+    with pytest.raises(MatrixOAuthError):
+        await MatrixOAuthClient(transport, clock=lambda: 1900).refresh(previous)
+    assert len(transport.requests) == 1

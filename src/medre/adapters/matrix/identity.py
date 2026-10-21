@@ -145,10 +145,6 @@ class MatrixCrossSigningService:
             self._logger.warning(
                 "Matrix cross-signing reconciliation failed (%s)", type(exc).__name__
             )
-            self._logger.debug(
-                "Matrix cross-signing failure category: %s",
-                self._diagnostics.last_failure_category,
-            )
             return None
 
     async def _reconcile(

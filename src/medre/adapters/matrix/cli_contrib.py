@@ -220,7 +220,10 @@ def dispatch_matrix_cli(args: Any) -> bool:
 
             try:
                 asyncio.run(logout_credentials())
-            except (MatrixConnectionError, MatrixOAuthError, OSError, ValueError):
+            except MatrixOAuthError as exc:
+                print(f"Matrix logout failed: {exc}", file=sys.stderr)
+                raise SystemExit(1) from None
+            except (MatrixConnectionError, OSError, ValueError):
                 print(
                     "Matrix logout failed; saved credentials were retained. Check connectivity and retry.",
                     file=sys.stderr,
