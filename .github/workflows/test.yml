@@ -54,6 +54,9 @@ jobs:
           git show --format= --check HEAD
       - name: Install core test environment
         run: uv sync --project .core --locked --extra dev
+      - name: Verify selected core supports native typing
+        run: |
+          .core/.venv/bin/python -c "from medre.core.contracts.typing import TypingActivity, TypingSnapshot, TypingUpdate; from medre.core.contracts.adapter import AdapterCapabilities; assert AdapterCapabilities().typing is False"
       - name: Install this adapter without native SDKs
         if: matrix.mode == 'fake'
         run: uv pip install --python .core/.venv/bin/python --no-deps -e .
@@ -102,6 +105,9 @@ jobs:
         run: |
           uv sync --project .core --locked --extra dev
           .core/.venv/Scripts/python.exe .core/scripts/ci/install_checkout_adapter.py --adapter . --test --python .core/.venv/Scripts/python.exe
+      - name: Verify selected core supports native typing
+        run: |
+          .core/.venv/Scripts/python.exe -c "from medre.core.contracts.typing import TypingActivity, TypingSnapshot, TypingUpdate; from medre.core.contracts.adapter import AdapterCapabilities; assert AdapterCapabilities().typing is False"
       - name: Prove installed cryptography is enabled, not merely importable
         run: |
           .core/.venv/Scripts/python.exe -c "from nio.crypto import ENCRYPTION_ENABLED; assert ENCRYPTION_ENABLED, 'mindroom-nio E2EE is disabled on Windows'"

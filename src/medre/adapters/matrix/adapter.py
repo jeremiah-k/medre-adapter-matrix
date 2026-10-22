@@ -68,6 +68,7 @@ from medre.core.ingress import (
     IngressProvenance,
 )
 from medre.core.ingress.content import AttachmentContentUnavailableError
+from medre.core.contracts.typing import TypingSnapshot, TypingUpdate
 from medre.core.rendering.renderer import RenderingResult
 from msgspec import structs as _msgspec_structs
 
@@ -88,6 +89,7 @@ _MATRIX_CAPABILITIES = AdapterCapabilities(
     direct_messages=True,
     channels=True,
     topic_rooms=True,
+    typing=True,
 )
 
 # Delivery retry constants
@@ -407,6 +409,9 @@ class MatrixAdapter(AdapterContract):
         self._session = MatrixSession(
             config=self._config,
             message_callback=self._on_room_message,
+            typing_callback=(
+                self._on_room_typing if ctx.publish_typing is not None else None
+            ),
             admission_callback=(
                 self._on_room_message if ctx.admit_inbound is not None else None
             ),
@@ -651,6 +656,49 @@ class MatrixAdapter(AdapterContract):
                 "cannot send encrypted message",
                 transient=False,
             )
+
+    async def _on_room_typing(self, room_id: str, users: list[str]) -> None:
+        """Publish one native replacement list without maintaining an actor cache."""
+        ctx = self.ctx
+        if (
+            ctx is None
+            or ctx.publish_typing is None
+            or not self._started
+            or self._starting
+        ):
+            return
+        allowed = self._config.room_allowlist
+        if room_id not in (
+            allowed if allowed is not None else self._config.auto_join_rooms
+        ):
+            return
+        try:
+            snapshot = TypingSnapshot(
+                room_id, tuple(user for user in users if user != self._config.user_id)
+            )
+        except (TypeError, ValueError):
+            return
+        await ctx.publish_typing(snapshot)
+
+    async def send_typing(self, update: TypingUpdate) -> None:
+        """Apply relay-user activity under native room, crypto, and lifecycle guards."""
+        session = self._session
+        if not self._started or session is None or session.closed:
+            raise AdapterPermanentError("Matrix typing session is not started")
+        if update.target.adapter_id != self.adapter_id:
+            raise AdapterPermanentError("Mismatched Matrix typing adapter")
+        room = update.target.channel_id
+        allowed = self._config.room_allowlist
+        if room not in (
+            allowed if allowed is not None else self._config.auto_join_rooms
+        ) or not session.is_room_member(room):
+            raise AdapterPermanentError("Unconfigured Matrix typing room")
+        self._check_encrypted_room_safety(
+            room, room_encrypted=session.is_room_encrypted(room)
+        )
+        await session.room_typing(
+            room, update.typing, max(1, int(update.timeout_seconds * 1000))
+        )
 
     async def deliver(self, result: RenderingResult) -> AdapterHandoffResult:
         """Deliver a rendered Matrix operation to a room.
