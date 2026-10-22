@@ -26,3 +26,20 @@ retain its supplied `meshtastic_replyId` independently of the Matrix-native
 relation. Relation metadata takes precedence over the native interop field.
 Absent compatibility metadata MUST NOT be replaced with a canonical ID or a
 foreign native reference. The original `meshtastic_text` MUST remain unchanged.
+
+## Text presentation
+
+Text messages and effective text edits MAY carry canonical semantic formatting.
+The codec MUST admit only bounded, supported HTML whose decoded visible text
+matches the authoritative plain body. Unknown markup, unsafe links, malformed
+nesting, or inconsistent bodies MUST retain unchanged plain text. A valid reply
+fallback MAY be removed from HTML only when a reply or thread relation exists.
+
+The renderer MUST escape content and link attributes independently. Prefixes
+MUST remain outside source styles. Formatted content uses the authoritative body; unformatted legacy
+payloads retain their text-alias precedence. Changed relation fallbacks and truncated content MUST NOT reuse source
+span offsets. Block styles with an inline attribution prefix MUST fall back to
+plain presentation when their complete-line bounds cannot be preserved.
+Only supported semantic tags are emitted; source HTML attributes and arbitrary
+markup MUST NOT be forwarded. Formatting does not establish identity or change
+relation ownership, native metadata, or delivery confirmation.

@@ -186,7 +186,14 @@ def test_matrix_edit_uses_new_content_and_generic_edit_relation() -> None:
     event = codec.decode(native)
 
     assert event.event_kind == EventKind.MESSAGE_EDITED
-    assert event.payload == {"body": "corrected", "msgtype": "m.text"}
+    assert event.payload == {
+        "body": "corrected",
+        "msgtype": "m.text",
+        "formatting": {
+            "version": 1,
+            "spans": ({"start": 0, "end": 9, "style": "strong"},),
+        },
+    }
     assert event.relations[0].relation_type == "edit"
     assert event.relations[0].target_native_ref.native_message_id == "$target"
     matrix = _matrix_data(event)

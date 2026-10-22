@@ -34,6 +34,7 @@ from dataclasses import replace
 import msgspec
 from typing import Any, Mapping
 
+from .styling import render_payload, source_text
 from medre.adapters.matrix.event_shape import mmrelay_interop_fields
 from medre.adapters.matrix.metadata import build_matrix_metadata_content
 from medre.adapters.matrix.outbound import MatrixOutboundOperation
@@ -426,7 +427,7 @@ class MatrixRenderer:
             result = self._render_fallback_text(event, ctx, reply_relation=reply_rel)
             return replace(result, fallback_applied="relation_reply")
 
-        body = str(event.payload.get("text", event.payload.get("body", "")))
+        body = source_text(event.payload)
 
         # Determine if a reaction relation is present before applying the
         # body-level prefix — reactions manage their own prefix metadata.
@@ -451,7 +452,8 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": self._text_to_html(body),
+            "formatted_body": render_payload(event.payload, body)
+            or self._text_to_html(body),
         }
         event_type = "m.room.message"
 
@@ -1125,7 +1127,7 @@ class MatrixRenderer:
                 "m.in_reply_to": {"event_id": root_id},
             }
 
-        body = str(event.payload.get("text", event.payload.get("body", "")))
+        body = source_text(event.payload)
         body, prefix_meta = self._apply_matrix_relay_prefix(
             event, body, target_adapter, ctx
         )
@@ -1134,7 +1136,8 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": self._text_to_html(body),
+            "formatted_body": render_payload(event.payload, body)
+            or self._text_to_html(body),
             "m.relates_to": relates_to,
         }
 
@@ -1164,7 +1167,7 @@ class MatrixRenderer:
     ) -> RenderingResult:
         """Render a plain message, optionally retaining one bound reply."""
         target_adapter = ctx.target_adapter
-        body = str(event.payload.get("text", event.payload.get("body", "")))
+        body = source_text(event.payload)
         body, prefix_meta = self._apply_matrix_relay_prefix(
             event, body, target_adapter, ctx
         )
@@ -1173,7 +1176,8 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": self._text_to_html(body),
+            "formatted_body": render_payload(event.payload, body)
+            or self._text_to_html(body),
         }
         if reply_target_id is not None:
             content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_target_id}}
@@ -1260,7 +1264,7 @@ class MatrixRenderer:
             ctx.target_channel,
         )
 
-        new_text = str(event.payload.get("text", event.payload.get("body", "")))
+        new_text = source_text(event.payload)
         # Exactly one relay attribution: applied once to the new body.
         new_body, prefix_meta = self._apply_matrix_relay_prefix(
             event, new_text, target_adapter, ctx
@@ -1271,13 +1275,15 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": new_body,
             "format": "org.matrix.custom.html",
-            "formatted_body": self._text_to_html(new_body),
+            "formatted_body": render_payload(event.payload, new_body)
+            or self._text_to_html(new_body),
         }
         content: dict[str, object] = {
             "msgtype": "m.text",
             "body": fallback_body,
             "format": "org.matrix.custom.html",
-            "formatted_body": self._text_to_html(fallback_body),
+            "formatted_body": render_payload(event.payload, fallback_body)
+            or self._text_to_html(fallback_body),
             "m.new_content": new_content,
             "m.relates_to": {
                 "rel_type": "m.replace",
@@ -1469,7 +1475,7 @@ class MatrixRenderer:
         if event.metadata and event.metadata.native:
             native_data = dict(event.metadata.native.data)
 
-        text = str(event.payload.get("text", event.payload.get("body", "")))
+        text = source_text(event.payload)
 
         content[KEY_ID] = self._resolve_mmrelay_packet_id(native_data)
         _longname, _shortname = self._resolve_mmrelay_sender_names(native_data)
