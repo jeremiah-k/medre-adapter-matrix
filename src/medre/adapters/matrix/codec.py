@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
+from .styling import from_html
 from medre.adapters.matrix.errors import MatrixCodecError
 from medre.adapters.matrix.event_shape import (
     MEDIA_MSGTYPES,
@@ -171,6 +172,14 @@ class MatrixCodec(AdapterCodec):
                 content=content,
                 relation=relation,
             )
+
+        if event_kind in {EventKind.MESSAGE_CREATED, EventKind.MESSAGE_EDITED}:
+            styled = from_html(
+                body,
+                effective_content,
+                reply=relation is not None and relation.kind in {"reply", "thread"},
+            )
+            payload.update(styled.to_payload())
 
         origin_server_ts_ms = self._origin_server_ts_ms(
             normalized.server_timestamp, source

@@ -27,6 +27,14 @@ for a locked uv deployment project, private Git, local checkouts, index sources,
 and the same-environment requirement. Neither MEDRE nor the provider installs
 packages during runtime startup.
 
+## Message presentation
+
+Supported Matrix HTML maps to bounded canonical text spans when its visible text
+matches the plain body. Outbound content escapes text and links and keeps relay
+attribution outside source styles. Unsupported or inconsistent markup retains
+plain presentation. See the [presentation contract](docs/spec/relay-attribution.md#text-presentation)
+for reply, edit, truncation, and block-boundary behavior.
+
 ## Browser-approved Matrix login
 
 For an OAuth-enabled homeserver, authorize MEDRE from your browser instead of
