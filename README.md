@@ -283,3 +283,17 @@ best-effort clears; they create no canonical event, outbox row or receipt.
 Unchanged composition can expire after core's 30-second freshness bound unless
 another native observation arrives. Message forwarding alone does not opt in. The [typing contract](docs/spec/transient-typing.md)
 defines native scope and live-sync behavior.
+
+## Encryption readiness
+
+Install `medre adapters install 'matrix[e2e]'` before using encrypted rooms.
+Installing the base `matrix` provider after `matrix[e2e]` requests installation
+without that extra; use the explicit extra when selecting the provider.
+
+With e2ee_optional, missing crypto dependencies or unsuccessful initialization
+leave unencrypted rooms usable and report degraded health. Startup logs and
+crypto diagnostics explain the limitation. Encrypted-room delivery remains
+refused: optional encryption never authorizes plaintext delivery into an
+encrypted room. Use e2ee_required when the adapter must fail startup instead.
+Inspect `medre diagnostics --refresh-health` after restarting. Repairing the
+installation does not require deleting credentials or resetting cross-signing.

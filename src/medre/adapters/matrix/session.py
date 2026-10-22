@@ -958,17 +958,28 @@ class MatrixSession:
 
         If ``HAS_E2EE`` is ``True``, attempt crypto setup (deriving
         store_path/device_id internally as needed).  On failure, log a
-        warning and fall back to plaintext with ``crypto_enabled=False``.
+        warning and continue with unencrypted rooms only. Encrypted-room sends
+        remain refused whenever ``crypto_enabled`` is false.
         """
         can_attempt_crypto = _compat_mod.HAS_E2EE
 
         if can_attempt_crypto:
             try:
                 await self._start_e2ee_required()
-                return  # crypto start succeeded
+                if not self._crypto_enabled:
+                    self._last_crypto_error = (
+                        "E2EE initialization did not activate crypto; "
+                        "check the crypto store and Matrix diagnostics"
+                    )
+                    self._logger.warning(
+                        "%s; only unencrypted rooms are available",
+                        self._last_crypto_error,
+                    )
+                return
             except Exception as exc:
                 self._logger.warning(
-                    "E2EE optional setup failed, falling back to " "plaintext: %s",
+                    "E2EE optional setup failed; only unencrypted rooms "
+                    "are available: %s",
                     exc,
                 )
                 self._crypto_enabled = False
@@ -982,7 +993,15 @@ class MatrixSession:
                         pass
                     self._client = None
 
-        # Plaintext fallback
+        if not can_attempt_crypto:
+            self._last_crypto_error = (
+                "E2EE dependencies unavailable; run "
+                "medre adapters install 'matrix[e2e]' and restart the bridge"
+            )
+            self._logger.warning(
+                "%s; only unencrypted rooms are available",
+                self._last_crypto_error,
+            )
         await self._start_plaintext()
 
     async def _discover_device_id(self) -> str:
@@ -1940,7 +1959,12 @@ class MatrixSession:
         event_id = getattr(event, "event_id", "<unknown>")
         room_id = getattr(room, "room_id", "<unknown>") if room else "<unknown>"
 
-        self._last_crypto_error = f"Undecryptable MegolmEvent {event_id} in {room_id}"
+        # A failed optional-crypto startup is the actionable root cause.
+        # Receiving an undecryptable event must not replace its repair guidance.
+        if self._crypto_enabled or self._last_crypto_error is None:
+            self._last_crypto_error = (
+                f"Undecryptable MegolmEvent {event_id} in {room_id}"
+            )
 
         self._encrypted_room_seen = True
 
