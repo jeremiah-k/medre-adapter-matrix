@@ -60,6 +60,8 @@ def test_blocks_entities_links_and_opaque_pre():
         '<a href="https://example.org" href="https://evil.example">safe</a>',
         "<mx-reply>safe</mx-reply>",
         "<!DOCTYPE html><b>safe</b>",
+        "<b>safe</b><!--hidden-->",
+        "<b>safe</b><?ignored processing?>",
         "<span>" * 20 + "safe" + "</span>" * 20,
     ],
 )
@@ -192,3 +194,16 @@ def test_inline_prefix_cannot_turn_complete_line_blocks_into_partial_blocks():
     assert "<blockquote>quote</blockquote>" in render_payload(
         value.to_payload(), "[alice]\nquote"
     )
+
+
+async def test_relation_fallback_uses_styled_body_not_stale_legacy_text_alias():
+    payload = StyledText("correct 🦉", (TextSpan(0, 7, "strong"),)).to_payload()
+    payload["text"] = "stale legacy alias"
+    source = event(payload, (EventRelation("reply", "missing", None, None, "parent"),))
+    result = await MatrixRenderer().render(
+        source, RenderingContext("fallback_text", "matrix", "!room:test", "matrix")
+    )
+    content = result.payload["_matrix_operation"]["content"]
+    assert "correct 🦉" in content["body"]
+    assert "stale legacy alias" not in content["body"]
+    assert "<strong>" not in content["formatted_body"]

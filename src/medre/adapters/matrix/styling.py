@@ -114,6 +114,12 @@ class _PresentationParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         self._append(data)
 
+    def handle_comment(self, data: str) -> None:
+        raise ValueError("Unsupported HTML comment")
+
+    def handle_pi(self, data: str) -> None:
+        raise ValueError("Unsupported HTML processing instruction")
+
     def handle_decl(self, decl: str) -> None:
         raise ValueError("Unsupported HTML declaration")
 
