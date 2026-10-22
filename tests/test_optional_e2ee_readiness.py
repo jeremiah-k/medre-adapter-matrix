@@ -70,9 +70,11 @@ async def test_completed_crypto_setup_without_active_crypto_is_reported(
     """A setup call returning normally cannot conceal an unusable Olm/store pair."""
     session = MatrixSession(config())
     monkeypatch.setattr("medre.adapters.matrix.compat.HAS_E2EE", True)
-    monkeypatch.setattr(MatrixSession, "_start_e2ee_required", AsyncMock())
+    attempted = AsyncMock()
+    monkeypatch.setattr(MatrixSession, "_start_e2ee_required", attempted)
     with caplog.at_level(logging.WARNING):
         await session._start_e2ee_optional()
+    attempted.assert_awaited_once()
     assert "did not activate crypto" in session.last_crypto_error
     assert "only unencrypted rooms" in caplog.text
 
@@ -96,3 +98,27 @@ async def test_optional_setup_exception_retains_reason_and_plain_room_operation(
     assert "test crypto initialization failed" in session.last_crypto_error
     assert "only unencrypted rooms" in caplog.text
     assert not session.crypto_enabled
+
+
+async def test_undecryptable_event_does_not_erase_optional_crypto_startup_failure():
+    """A later encrypted event cannot mask installation/repair guidance."""
+    session = MatrixSession(config())
+    session._last_crypto_error = "E2EE dependencies unavailable; install matrix[e2e]"
+    session._crypto_enabled = False
+    await session._on_megolm_event(
+        SimpleNamespace(room_id="!encrypted:example.invalid"),
+        SimpleNamespace(event_id="$opaque"),
+    )
+    assert "install matrix[e2e]" in (session.diagnostics().last_crypto_error or "")
+    assert session.diagnostics().undecryptable_event_count == 1
+
+
+async def test_undecryptable_event_reports_event_when_crypto_is_operational():
+    """With active crypto an event failure remains the diagnostic message."""
+    session = MatrixSession(config())
+    session._crypto_enabled = True
+    await session._on_megolm_event(
+        SimpleNamespace(room_id="!encrypted:example.invalid"),
+        SimpleNamespace(event_id="$bad"),
+    )
+    assert "$bad" in (session.diagnostics().last_crypto_error or "")

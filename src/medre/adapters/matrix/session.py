@@ -1959,7 +1959,12 @@ class MatrixSession:
         event_id = getattr(event, "event_id", "<unknown>")
         room_id = getattr(room, "room_id", "<unknown>") if room else "<unknown>"
 
-        self._last_crypto_error = f"Undecryptable MegolmEvent {event_id} in {room_id}"
+        # A failed optional-crypto startup is the actionable root cause.
+        # Receiving an undecryptable event must not replace its repair guidance.
+        if self._crypto_enabled or self._last_crypto_error is None:
+            self._last_crypto_error = (
+                f"Undecryptable MegolmEvent {event_id} in {room_id}"
+            )
 
         self._encrypted_room_seen = True
 

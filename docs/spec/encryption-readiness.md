@@ -12,3 +12,8 @@ Encrypted-room sends MUST remain refused whenever crypto is inactive. Optional
 mode MUST NOT authorize downgrading encrypted-room content to plaintext.
 e2ee_required retains its fail-closed startup behavior. Credential identity and
 cross-signing reset policy remain independent of package installation.
+
+When encryption initialization is inactive, later undecryptable event observations
+MUST NOT replace the startup dependency or repair diagnosis. Undecryptable-event
+counters remain available, and event-specific diagnostics MAY replace the last
+error only while crypto is operational or no startup diagnosis exists.

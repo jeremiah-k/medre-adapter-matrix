@@ -5,3 +5,6 @@ otherwise connected and syncing sessions. Record missing dependencies in crypto
 diagnostics with the matrix[e2e] install command and explain unsuccessful crypto
 initialization before delivery fails. Keep encrypted-room sends fail-closed and
 preserve unencrypted-room operation in optional mode.
+
+Keep the actionable startup crypto limitation when later Megolm failures arrive;
+exercise the actual initialization attempt in the readiness regression test.
