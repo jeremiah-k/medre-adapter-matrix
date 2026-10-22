@@ -541,6 +541,16 @@ class MatrixAdapter(AdapterContract):
                     if (now - last_sync) > stale_timeout:
                         health = "degraded"
 
+        if (
+            health == "healthy"
+            and self._session is not None
+            and self._config.encryption_mode != "plaintext"
+            and not self._session.crypto_enabled
+        ):
+            # Optional startup preserves unencrypted-room operation, but it
+            # cannot satisfy the configured encryption feature without crypto.
+            health = "degraded"
+
         self._last_health = health
         return AdapterInfo(
             adapter_id=self.adapter_id,
