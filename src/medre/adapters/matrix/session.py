@@ -29,7 +29,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, cast
+from typing import Any, Awaitable, Callable, Iterable, Literal, cast
 
 import medre.adapters.matrix.compat as _compat_mod
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
@@ -310,6 +310,7 @@ class MatrixSession:
         "_sync_task",
         "_sync_failure",
         "_message_callback",
+        "_typing_callback",
         "_admission_callback",
         "_checkpoint_loader",
         "_checkpoint_committer",
@@ -371,6 +372,7 @@ class MatrixSession:
         self,
         config: MatrixConfig,
         message_callback: Callable[..., Any] | None = None,
+        typing_callback: Callable[[str, list[str]], Awaitable[None]] | None = None,
         admission_callback: Callable[..., Any] | None = None,
         checkpoint_loader: Callable[..., Any] | None = None,
         checkpoint_committer: Callable[..., Any] | None = None,
@@ -384,6 +386,7 @@ class MatrixSession:
         self._sync_task: asyncio.Task[None] | None = None
         self._sync_failure: Exception | None = None
         self._message_callback = message_callback
+        self._typing_callback = typing_callback
         self._admission_callback = admission_callback
         self._checkpoint_loader = checkpoint_loader
         self._checkpoint_committer = checkpoint_committer
@@ -1658,6 +1661,19 @@ class MatrixSession:
             )
 
         import nio
+
+        if self._typing_callback is not None:
+            if self._durable_sync_enabled:
+                # Pinned nio suppresses ordinary ephemeral callbacks during
+                # limited-timeline recovery. Read only this live sync response;
+                # activity never enters recovery/admission or checkpoint state.
+                self._client.add_response_callback(
+                    self._on_typing_sync_response, nio.SyncResponse
+                )
+            else:
+                self._client.add_ephemeral_callback(
+                    self._on_typing, nio.TypingNoticeEvent
+                )
 
         message_classes: tuple[Any, ...] = tuple(
             dict.fromkeys(
@@ -2991,6 +3007,34 @@ class MatrixSession:
         if not is_nio_rate_limited_response(response):
             return
         raise _RoomRateLimitIntercept(response)
+
+    async def _on_typing_sync_response(self, response: Any) -> None:
+        """Project live sync ephemera when nio owns durable timeline recovery."""
+        from nio import TypingNoticeEvent
+
+        if self._typing_callback is None:
+            return
+        for room_id, info in response.rooms.join.items():
+            for event in info.ephemeral:
+                if isinstance(event, TypingNoticeEvent):
+                    await self._typing_callback(room_id, event.users)
+
+    async def _on_typing(self, room: Any, event: Any) -> None:
+        """Forward live ephemeral state outside durable timeline admission callbacks."""
+        if self._typing_callback is not None:
+            await self._typing_callback(room.room_id, event.users)
+
+    async def room_typing(self, room_id: str, typing: bool, timeout_ms: int) -> None:
+        """Use the owned SDK client; never report this request as message delivery."""
+        if self._client is None or self.closed:
+            raise MatrixConnectionError("Matrix typing client is not connected")
+        from nio import RoomTypingResponse
+
+        response = await self._client.room_typing(
+            room_id, typing_state=typing, timeout=timeout_ms
+        )
+        if not isinstance(response, RoomTypingResponse):
+            raise MatrixConnectionError("Matrix typing request failed")
 
     async def room_send(
         self,

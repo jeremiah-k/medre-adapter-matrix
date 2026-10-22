@@ -56,6 +56,7 @@ from medre.core.contracts.adapter import (
     AdapterPermanentError,
     AdapterRole,
 )
+from medre.core.contracts.typing import TypingSignal, TypingUpdate
 from medre.core.events.canonical import (
     CanonicalEvent,
     EventRelation,
@@ -97,6 +98,7 @@ _FAKE_MATRIX_CAPABILITIES = AdapterCapabilities(
     direct_messages=True,
     channels=True,
     topic_rooms=True,
+    typing=True,
 )
 
 
@@ -152,6 +154,7 @@ class FakeMatrixAdapter(AdapterContract):
         self.ctx: AdapterContext | None = None
         self.received_events: list[CanonicalEvent] = []
         self.delivered_payloads: list[RenderingResult] = []
+        self.typing_updates: list[TypingUpdate] = []
         self.sent_operations: list[MatrixOutboundOperation] = []
         self.inbound_events: list[CanonicalEvent] = []
         #: (content_ref, stored bytes) for send_media operations resolved
@@ -200,6 +203,20 @@ class FakeMatrixAdapter(AdapterContract):
         }
 
     # -- Outbound delivery --------------------------------------------------
+
+    async def send_typing(self, update: TypingUpdate) -> None:
+        """Record bounded desired activity without claiming native delivery."""
+        if not self._started or update.target.adapter_id != self.adapter_id:
+            raise AdapterPermanentError("Fake typing adapter is stopped or mismatched")
+        self.typing_updates.append(update)
+        if len(self.typing_updates) > 1000:
+            del self.typing_updates[:-1000]
+
+    async def simulate_typing(self, activity: TypingSignal) -> bool:
+        """Publish immutable activity only through the injected source-bound sink."""
+        if not self._started or self.ctx is None or self.ctx.publish_typing is None:
+            return False
+        return await self.ctx.publish_typing(activity)
 
     async def deliver(self, result: RenderingResult) -> AdapterHandoffResult:
         """Accept an outbound rendered operation for delivery.

@@ -268,3 +268,18 @@ server-visible signing chain. A fresh device uploads its keys before reusing
 the account signing identity; ordinary login does not require rotating that
 identity. Keep the E2EE store when renewing credentials. A cross-signing reset
 replaces account identity material and can require verification in other clients.
+
+## Transient typing
+
+Routes can explicitly opt in with `forward_typing: true` when both endpoints
+support typing and map concrete conversations. The adapter projects Matrix's
+complete ephemeral user lists into core actor leases, excludes its own relay
+user, and sends the aggregate indicator as the configured relay account.
+
+Typing is separate from message encryption and discloses activity even in
+encrypted rooms. The same configured-room, joined-room and encryption-safety
+guards apply to outbound requests. Indicators use finite native timeouts and
+best-effort clears; they create no canonical event, outbox row or receipt.
+Unchanged composition can expire after core's 30-second freshness bound unless
+another native observation arrives. Message forwarding alone does not opt in. The [typing contract](docs/spec/transient-typing.md)
+defines native scope and live-sync behavior.
