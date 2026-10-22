@@ -463,14 +463,6 @@ class MatrixRenderer:
             mx_event_id = self._matrix_target_event_id(
                 rel, target_adapter, target_channel
             )
-            native_data: dict[str, object] = {}
-            if event.metadata and event.metadata.native:
-                native_data = dict(event.metadata.native.data)
-            # Extract MMRelay meshtastic_replyId from relation metadata
-            rel_meta = getattr(rel, "metadata", {}) or {}
-            mmrelay_id = rel_meta.get("meshtastic_reply_id")
-            if mmrelay_id in (None, ""):
-                mmrelay_id = mmrelay_interop_fields(native_data).get(KEY_REPLY_ID)
             if mx_event_id:
                 # Matrix-native reply — render m.in_reply_to with Matrix event ID.
                 # No manual fallback quoting: Matrix clients handle display
@@ -481,11 +473,7 @@ class MatrixRenderer:
                         "event_id": mx_event_id,
                     }
                 }
-            # Legacy reply identity is opt-in; native Matrix relations remain
-            # available independently of mmrelay interoperability.
-            mx_reply_id = mmrelay_id if mmrelay_id not in (None, "") else mx_event_id
-            if self._get_mmrelay_compat(event) and mx_reply_id not in (None, ""):
-                content[KEY_REPLY_ID] = str(mx_reply_id)
+            self._inject_mmrelay_reply_metadata(event, rel, content, mx_event_id)
 
         elif selected_reaction is not None:
             reaction_prefix_meta, event_type = self._render_reaction(
@@ -522,6 +510,27 @@ class MatrixRenderer:
             metadata=metadata,
             fallback_applied=None,
         )
+
+    def _inject_mmrelay_reply_metadata(
+        self,
+        event: CanonicalEvent,
+        relation: EventRelation,
+        content: dict[str, object],
+        matrix_event_id: str | None = None,
+    ) -> None:
+        """Retain opt-in reply identity without inventing a native relation."""
+        if not self._get_mmrelay_compat(event):
+            return
+        reply_id = relation.metadata.get("meshtastic_reply_id")
+        if reply_id in (None, ""):
+            native_data = (
+                dict(event.metadata.native.data) if event.metadata.native else {}
+            )
+            reply_id = mmrelay_interop_fields(native_data).get(KEY_REPLY_ID)
+        if reply_id in (None, ""):
+            reply_id = matrix_event_id
+        if reply_id not in (None, ""):
+            content[KEY_REPLY_ID] = str(reply_id)
 
     # ------------------------------------------------------------------
     # Fallback-text rendering
@@ -592,6 +601,9 @@ class MatrixRenderer:
         # rendering is degraded but transport metadata is still valid.
         if self._get_mmrelay_compat(event):
             self._inject_mmrelay_metadata(event, content, ctx.source_origin_label)
+        reply = reply_relation or _find_relation(event.relations, "reply")
+        if reply is not None:
+            self._inject_mmrelay_reply_metadata(event, reply, content)
 
         result_metadata: dict[str, object] = {
             "renderer": self.name,

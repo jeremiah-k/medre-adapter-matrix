@@ -20,3 +20,9 @@ a Matrix relation from a canonical ID, a different adapter, or another room.
 The renderer MUST record the `relation_reply` fallback and preserve reply
 precedence when another relation appears first. This fallback MUST NOT change
 the stored event, its relation tuple, or its source attribution.
+
+When MMRelay interoperability is enabled for the source, an unbound reply MUST
+retain its supplied `meshtastic_replyId` independently of the Matrix-native
+relation. Relation metadata takes precedence over the native interop field.
+Absent compatibility metadata MUST NOT be replaced with a canonical ID or a
+foreign native reference. The original `meshtastic_text` MUST remain unchanged.
