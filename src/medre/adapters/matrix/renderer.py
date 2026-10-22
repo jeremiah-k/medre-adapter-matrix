@@ -31,6 +31,7 @@ never degrades into an ordinary message.
 from __future__ import annotations
 
 from dataclasses import replace
+import msgspec
 from typing import Any, Mapping
 
 from medre.adapters.matrix.event_shape import mmrelay_interop_fields
@@ -417,6 +418,14 @@ class MatrixRenderer:
         if thread_rel is not None:
             return self._render_thread(event, ctx, thread_rel, reply_rel)
 
+        if (
+            reply_rel is not None
+            and self._matrix_target_event_id(reply_rel, target_adapter, target_channel)
+            is None
+        ):
+            result = self._render_fallback_text(event, ctx, reply_relation=reply_rel)
+            return replace(result, fallback_applied="relation_reply")
+
         body = str(event.payload.get("text", event.payload.get("body", "")))
 
         # Determine if a reaction relation is present before applying the
@@ -522,6 +531,8 @@ class MatrixRenderer:
         self,
         event: CanonicalEvent,
         ctx: RenderingContext,
+        *,
+        reply_relation: EventRelation | None = None,
     ) -> RenderingResult:
         """Render event with degraded relation text for fallback_text strategy.
 
@@ -534,7 +545,12 @@ class MatrixRenderer:
         Sets ``fallback_applied="strategy_fallback_text"`` on the result.
         """
         # Reuse deterministic wording for degraded relations
-        degraded_text = extract_relation_text(event)
+        text_event = (
+            msgspec.structs.replace(event, relations=(reply_relation,))
+            if reply_relation is not None
+            else event
+        )
+        degraded_text = extract_relation_text(text_event)
 
         # Apply relay prefix for mesh→Matrix direction BEFORE truncation
         # so that the final body (prefix + text) respects the text budget.
