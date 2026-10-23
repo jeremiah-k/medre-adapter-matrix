@@ -431,7 +431,9 @@ async def test_reset_flag_without_adapter_id_is_rejected_before_login() -> None:
     login.assert_not_called()
 
 
-async def test_basic_login_without_adapter_id_remains_sdk_free(tmp_path: Path) -> None:
+async def test_basic_login_without_adapter_id_remains_sdk_free(
+    tmp_path: Path, capsys
+) -> None:
     from medre.adapters.matrix.cli import _adapter_matrix_auth_login
 
     args = SimpleNamespace(
@@ -463,6 +465,12 @@ async def test_basic_login_without_adapter_id_remains_sdk_free(tmp_path: Path) -
         patch("builtins.__import__", side_effect=guarded_import),
     ):
         await _adapter_matrix_auth_login(args)
+    output = capsys.readouterr().out
+    assert "Cross-signing: not prepared" in output
+    assert "--adapter-id" in output
+    assert "Cross-signing: verified" not in output
+    assert result.access_token not in output
+    assert "fresh-password" not in output
 
 
 async def test_bootstrap_constructor_error_excludes_provider_details(

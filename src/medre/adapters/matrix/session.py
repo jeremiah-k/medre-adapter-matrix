@@ -945,7 +945,11 @@ class MatrixSession:
         elif diagnostics.reset_required:
             self._logger.warning(
                 "Matrix own-device cross-signing requires authenticated recovery; "
-                "runtime startup will not rotate identity material"
+                "restore this adapter's E2EE state or run "
+                "medre adapter matrix auth login --adapter-id %s. "
+                "Replacing lost identity material additionally requires an explicit "
+                "--reset-cross-signing; ordinary login does not recover signing keys.",
+                self._config.adapter_id,
             )
         elif diagnostics.repair_required:
             self._logger.info(

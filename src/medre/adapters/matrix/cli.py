@@ -262,6 +262,12 @@ async def _adapter_matrix_auth_login(args: object) -> None:
     if cross_signing_result is not None:
         print("Cross-signing: verified")
         print(f"E2EE store:    {cross_signing_result.store_path}")
+    else:
+        print("Cross-signing: not prepared by this login (no --adapter-id).")
+        print(
+            "For runtime device signing, repeat login with --adapter-id ADAPTER_ID "
+            "matching the adapter key in your config. Existing E2EE state is preserved."
+        )
 
 
 async def _adapter_matrix_auth_status(credentials_path: Path | None = None) -> None:
