@@ -314,7 +314,12 @@ async def test_login_bootstraps_before_persisting_credentials(
         return tmp_path / "matrix.json"
 
     stdout = io.StringIO()
+    stderr = io.StringIO()
     with (
+        patch(
+            "medre.config.adapters.matrix_credentials.load_credentials_json",
+            return_value=None,
+        ),
         patch("medre.adapters.matrix.auth.matrix_login", return_value=result),
         patch(
             "medre.adapters.matrix.auth.matrix_whoami",
@@ -326,11 +331,12 @@ async def test_login_bootstraps_before_persisting_credentials(
             side_effect=bootstrap,
         ),
         patch("sys.stdout", stdout),
+        patch("sys.stderr", stderr),
     ):
         await _adapter_matrix_auth_login(args)
 
     assert call_order == ["bootstrap", "save"]
-    output = stdout.getvalue()
+    output = stdout.getvalue() + stderr.getvalue()
     assert "Cross-signing: verified" in output
     assert "fresh-password" not in output
     assert result.access_token not in output
@@ -354,6 +360,10 @@ async def test_login_does_not_persist_credentials_when_bootstrap_fails(
     logout = MagicMock()
 
     with (
+        patch(
+            "medre.config.adapters.matrix_credentials.load_credentials_json",
+            return_value=None,
+        ),
         patch("medre.adapters.matrix.auth.matrix_login", return_value=result),
         patch(
             "medre.adapters.matrix.auth.matrix_whoami",
@@ -390,6 +400,10 @@ async def test_login_invalidates_session_when_bootstrap_is_cancelled() -> None:
     logout = MagicMock()
 
     with (
+        patch(
+            "medre.config.adapters.matrix_credentials.load_credentials_json",
+            return_value=None,
+        ),
         patch("medre.adapters.matrix.auth.matrix_login", return_value=result),
         patch(
             "medre.adapters.matrix.auth.matrix_whoami",
@@ -453,6 +467,10 @@ async def test_basic_login_without_adapter_id_remains_sdk_free(
         return real_import(name, *args, **kwargs)
 
     with (
+        patch(
+            "medre.config.adapters.matrix_credentials.load_credentials_json",
+            return_value=None,
+        ),
         patch("medre.adapters.matrix.auth.matrix_login", return_value=result),
         patch(
             "medre.adapters.matrix.auth.matrix_whoami",
@@ -465,7 +483,8 @@ async def test_basic_login_without_adapter_id_remains_sdk_free(
         patch("builtins.__import__", side_effect=guarded_import),
     ):
         await _adapter_matrix_auth_login(args)
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
     assert "Cross-signing: not prepared" in output
     assert "--adapter-id" in output
     assert "Cross-signing: verified" not in output
@@ -492,3 +511,57 @@ async def test_bootstrap_constructor_error_excludes_provider_details(
         )
     assert "PRIVATE_TOKEN" not in str(error.value)
     assert error.value.__suppress_context__ is True
+
+
+async def test_password_bootstrap_reuses_existing_device_without_leaking_token(
+    tmp_path,
+):
+    """Repeating login with --adapter-id must not allocate a second device."""
+    from medre.adapters.matrix.cli import _adapter_matrix_auth_login
+
+    existing = _login_result()
+    saved = {
+        "homeserver": existing.homeserver,
+        "user_id": existing.user_id,
+        "access_token": existing.access_token,
+        "device_id": existing.device_id,
+    }
+    args = SimpleNamespace(
+        homeserver=existing.homeserver,
+        user=existing.user_id,
+        password="fresh-password",
+        password_stdin=False,
+        adapter_id="main",
+        reset_cross_signing=False,
+    )
+    stream = io.StringIO()
+    stderr = io.StringIO()
+    bootstrap_result = SimpleNamespace(store_path=tmp_path / "store")
+    with (
+        patch(
+            "medre.config.adapters.matrix_credentials.load_credentials_json",
+            return_value=saved,
+        ),
+        patch("medre.adapters.matrix.auth.matrix_login") as new_login,
+        patch("medre.adapters.matrix.auth.matrix_logout") as logout,
+        patch(
+            "medre.adapters.matrix.auth.matrix_whoami",
+            return_value=existing.user_id,
+        ),
+        patch(
+            "medre.adapters.matrix.auth.save_credentials_json",
+            return_value=tmp_path / "creds",
+        ),
+        patch(
+            "medre.adapters.matrix.e2ee_bootstrap.bootstrap_login_cross_signing",
+            return_value=bootstrap_result,
+        ) as bootstrap,
+        patch("sys.stdout", stream),
+        patch("sys.stderr", stderr),
+    ):
+        await _adapter_matrix_auth_login(args)
+    new_login.assert_not_called()
+    logout.assert_not_called()
+    assert bootstrap.await_args.args[0].access_token == existing.access_token
+    assert existing.access_token not in stream.getvalue() + stderr.getvalue()
+    assert "fresh-password" not in stream.getvalue() + stderr.getvalue()

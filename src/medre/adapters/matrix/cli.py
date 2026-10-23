@@ -201,9 +201,40 @@ async def _adapter_matrix_auth_login(args: object) -> None:
         save_credentials_json,
     )
 
-    try:
+    # An adapter-scoped bootstrap should reuse its already-authenticated
+    # device. A second password login would create another device and orphan
+    # the first token when the credential sidecar is overwritten.
+    from medre.adapters.matrix.auth import MatrixLoginResult, _normalize_homeserver
+
+    original_session = False
+    if saved is not None:
+        if saved.get("user_id") != user_id or _normalize_homeserver(
+            str(saved.get("homeserver", ""))
+        ).rstrip("/") != _normalize_homeserver(homeserver).rstrip("/"):
+            print(
+                "Error: saved Matrix credentials belong to another account or homeserver; "
+                "use auth logout before switching.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        token = saved.get("access_token")
+        if not isinstance(token, str) or not token:
+            print(
+                "Error: existing Matrix credentials are incomplete; repair before login.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        result = MatrixLoginResult(
+            homeserver=_normalize_homeserver(homeserver).rstrip("/"),
+            user_id=user_id,
+            device_id=str(saved.get("device_id") or ""),
+            access_token=token,
+        )
+        original_session = True
+    else:
         result = matrix_login(homeserver, user_id, password)
 
+    try:
         try:
             whoami_user = matrix_whoami(result.homeserver, result.access_token)
 
@@ -235,13 +266,14 @@ async def _adapter_matrix_auth_login(args: object) -> None:
             creds_path = save_credentials_json(result)
 
         except BaseException:
-            try:
-                matrix_logout(result.homeserver, result.access_token)
-            except MatrixConnectionError:
-                print(
-                    "Warning: revoke the unsuccessful Matrix login in account settings.",
-                    file=sys.stderr,
-                )
+            if not original_session:
+                try:
+                    matrix_logout(result.homeserver, result.access_token)
+                except MatrixConnectionError:
+                    print(
+                        "Warning: revoke the unsuccessful Matrix login in account settings.",
+                        file=sys.stderr,
+                    )
             raise
 
     except MatrixConnectionError as exc:
