@@ -942,16 +942,19 @@ class MatrixSession:
             self._logger.debug(
                 "Matrix own-device cross-signing verified (%s)", result or "verified"
             )
-        elif diagnostics.reset_required:
-            self._logger.warning(
-                "Matrix own-device cross-signing requires authenticated recovery; "
-                "runtime startup will not rotate identity material"
+        elif diagnostics.reset_required or diagnostics.repair_required:
+            login_mode = "--oauth " if self._oauth_manager is not None else ""
+            guidance = (
+                "Matrix own-device cross-signing needs authenticated recovery; "
+                "restore this adapter's E2EE state or run "
+                "medre adapter matrix auth login %s--adapter-id %s. "
+                "Replacing lost identity material additionally requires an explicit "
+                "--reset-cross-signing; ordinary login must preserve signing keys."
             )
-        elif diagnostics.repair_required:
-            self._logger.info(
-                "Matrix own-device cross-signing needs operator bootstrap/repair; "
-                "continuing without identity rotation"
-            )
+            if diagnostics.reset_required:
+                self._logger.warning(guidance, login_mode, self._config.adapter_id)
+            else:
+                self._logger.info(guidance, login_mode, self._config.adapter_id)
 
     async def _start_e2ee_optional(self) -> None:
         """E2EE-optional startup.

@@ -78,3 +78,12 @@ References: [Matrix OAuth API](https://spec.matrix.org/latest/client-server-api/
 [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628),
 [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591), and
 [RFC 7009](https://www.rfc-editor.org/rfc/rfc7009).
+
+
+## Password login and runtime signing
+
+Password login without --adapter-id MUST report that it did not prepare
+cross-signing. Credentials alone MUST NOT be represented as verified runtime
+device signing. Selecting an adapter MUST target its configured E2EE store.
+Runtime diagnostics MUST identify the adapter-scoped recovery command. Missing
+private signing material MUST NOT trigger implicit account-identity replacement.
