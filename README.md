@@ -213,12 +213,20 @@ candidate pair with a one-run dispatch and a full core commit SHA:
 
 ```bash
 gh workflow run test.yml --ref ADAPTER_BRANCH -f core_ref=FULL_CORE_COMMIT_SHA
+gh workflow run test.yml --ref ADAPTER_BRANCH -f core_ref=FULL_CORE_COMMIT_SHA -f sdk_ref=FULL_SDK_COMMIT_SHA
 ```
 
 Record both revisions with the result. The candidate run does not replace the
 adapter PR's checks against core `main`. Follow the
 [coordinated-change policy](https://github.com/jeremiah-k/medre/blob/main/docs/dev/coordinated-changes.md)
 for dependency order and merged compatibility pins.
+
+A manual `sdk_ref` selects a full commit from `jeremiah-k/mindroom-nio` for
+installed-SDK jobs. The candidate is installed within the locked core constraints;
+its package version must satisfy the adapter's declared dependency. CI checks
+package consistency and installed-source provenance, and records the exact SDK
+commit. Default jobs retain the released SDK pin. Candidate-source runs qualify
+an experiment; they do not change deployment dependencies or compatibility pins.
 
 Core's compatibility matrix tests each selected adapter at the exact commit
 recorded in its manifest, along with cross-adapter behavior. In a coordinated
