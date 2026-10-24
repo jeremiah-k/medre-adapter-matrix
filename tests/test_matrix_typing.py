@@ -123,21 +123,13 @@ async def test_session_owns_typing_request_and_refuses_native_errors(monkeypatch
         await session.room_typing(ROOM, False, 1)
 
 
-async def test_durable_sync_reads_only_live_ephemera_not_recovery_timeline(monkeypatch):
-    """The pinned SDK omits ephemeral callbacks when timeline recovery is enabled."""
+async def test_live_ephemeral_callback_forwards_only_the_native_actor_list():
+    """Durable timeline dispatch never supplies activity to this callback."""
     callback = AsyncMock()
-
-    class Notice:
-        """Native-shaped ephemeral event, distinct from timeline content."""
-
-        users = ["@peer:example.org"]
-
-    monkeypatch.setitem(sys.modules, "nio", SimpleNamespace(TypingNoticeEvent=Notice))
     value, _, _ = adapter()
     session = MatrixSession(value._config, typing_callback=callback)
-    live = SimpleNamespace(ephemeral=[Notice(), object()], timeline=[Notice()])
-    await session._on_typing_sync_response(
-        SimpleNamespace(rooms=SimpleNamespace(join={ROOM: live}))
+    await session._on_typing(
+        SimpleNamespace(room_id=ROOM), SimpleNamespace(users=["@peer:example.org"])
     )
     callback.assert_awaited_once_with(ROOM, ["@peer:example.org"])
 

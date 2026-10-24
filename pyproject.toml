@@ -3,14 +3,14 @@ name = "medre-adapter-matrix"
 version = "0.1.0"
 readme = "README.md"
 description = "matrix transport adapter for MEDRE"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = ["Typing :: Typed"]
 license = "MIT"
-dependencies = ["medre>=0.1.0,<0.2.0", 'mindroom-nio==0.40.0']
+dependencies = ["medre>=0.1.0,<0.2.0", 'mindroom-nio[e2e]==1.1.5']
 
 [project.optional-dependencies]
 test = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-timeout==2.4.0", "jsonschema==4.26.0", "packaging==26.3"]
-e2e = ["mindroom-nio[e2e]==0.40.0"]
+e2e = ["mindroom-nio[e2e]==1.1.5"]
 
 [project.entry-points."medre.adapters"]
 matrix = "medre.adapters.matrix.plugin:adapter_spec"
@@ -72,10 +72,10 @@ ignore = [
 ]
 
 [tool.black]
-target-version = ["py311"]
+target-version = ["py312"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 explicit_package_bases = true
 follow_imports = "silent"

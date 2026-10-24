@@ -16,6 +16,7 @@ from pathlib import Path
 import medre.adapters.matrix.compat as _compat_mod
 from medre.adapters.matrix.auth import MatrixLoginResult
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
+from medre.adapters.matrix.durable_sync import is_adopted_store_error, open_sync
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.identity import (
     MatrixCrossSigningDiagnostics,
@@ -94,6 +95,7 @@ async def bootstrap_login_cross_signing(
             f"Failed to configure Matrix E2EE ({type(exc).__name__})"
         ) from None
 
+    owner = None
     try:
         token = login.access_token
         if oauth_manager is not None:
@@ -111,11 +113,29 @@ async def bootstrap_login_cross_signing(
             from medre.adapters.matrix.oauth_approval import signing_approval
 
             client.send = signing_approval(client.send, session.issuer)
-        client.restore_login(
-            user_id=login.user_id,
-            device_id=login.device_id,
-            access_token=token,
-        )
+        try:
+            client.restore_login(
+                user_id=login.user_id,
+                device_id=login.device_id,
+                access_token=token,
+            )
+        except Exception as error:
+            if not is_adopted_store_error(error):
+                raise
+            # Runtime-adopted stores must be reopened by their durable owner.
+            # Ordinary first-login stores stay ordinary until runtime can seed
+            # the application's existing cursor during adoption.
+            owner = open_sync(
+                client,
+                adapter_id=adapter_id,
+                homeserver=login.homeserver,
+                store_path=store_path,
+                sync_timeout_ms=30_000,
+                legacy_cursor=None,
+                managed_session=(
+                    oauth_manager.session if oauth_manager is not None else None
+                ),
+            )
         if not getattr(client, "logged_in", False):
             raise MatrixConnectionError(
                 "Matrix E2EE bootstrap could not restore the authenticated session"
@@ -158,7 +178,11 @@ async def bootstrap_login_cross_signing(
         raise
     finally:
         try:
-            await close_matrix_client(client, logger)
+            try:
+                if owner is not None:
+                    await owner.close()
+            finally:
+                await close_matrix_client(client, logger)
         except Exception:
             (logger or logging.getLogger(__name__)).debug(
                 "Matrix E2EE bootstrap client close failed"

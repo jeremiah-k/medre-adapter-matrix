@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.12", "3.13", "3.14"]
         mode: [fake, sdk]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +71,9 @@ jobs:
         run: .core/.venv/bin/python -m pytest -v -m "matrix_sdk and not local_integration and not soak and not live and not hardware and not docker"
 
   windows-e2ee-contract:
+    # mindroom-nio 1.1.5 requires POSIX file leases. Restore this lane when
+    # Windows ownership support is released; crypto import is insufficient.
+    if: ${{ false }}
     name: Windows Matrix E2EE SDK (py3.13)
     runs-on: windows-latest
     timeout-minutes: 20

@@ -110,7 +110,11 @@ def media_event(
 
 
 class StubMatrixSession:
-    """Boundary stub exposing only the media methods the adapter calls."""
+    """Boundary stub for unencrypted media transfers."""
+
+    def is_room_encrypted(self, room_id: str) -> bool:
+        """These fixtures exercise attachment transfer in unencrypted rooms."""
+        return False
 
     def __init__(self) -> None:
         self.download_calls: list[dict[str, Any]] = []

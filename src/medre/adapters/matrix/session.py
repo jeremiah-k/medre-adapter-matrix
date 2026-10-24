@@ -33,6 +33,11 @@ from typing import Any, Awaitable, Callable, Iterable, Literal, cast
 
 import medre.adapters.matrix.compat as _compat_mod
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
+from medre.adapters.matrix.durable_sync import (
+    MatrixBatchConsumer,
+    current_record,
+    open_sync,
+)
 from medre.adapters.matrix.errors import (
     MATRIX_ATTACHMENT_FETCH_DEFERRAL_COUNT_KEY,
     MATRIX_ATTACHMENT_FETCH_MAX_DEFERRALS,
@@ -156,6 +161,11 @@ def _is_retryable_sync_exception(exc: Exception) -> bool:
     error is a bug, not a transient transport condition, and must reach
     terminal supervision instead of retrying until shutdown.
     """
+    if type(exc).__module__ == "nio.durable.transport":
+        if type(exc).__name__ == "ConnectionRetriesExhausted":
+            return True
+        status = getattr(exc, "status", None)
+        return isinstance(status, int) and (status in (408, 429) or status >= 500)
     if isinstance(exc, (TimeoutError, OSError, RuntimeError)):
         return True
     return any(
@@ -315,6 +325,8 @@ class MatrixSession:
         "_checkpoint_loader",
         "_checkpoint_committer",
         "_durable_sync_enabled",
+        "_durable_owner",
+        "_batch_consumer",
         "_committed_sync_token",
         "_recovered_event_count",
         "_history_event_count",
@@ -380,6 +392,7 @@ class MatrixSession:
         auto_join_rooms: tuple[str, ...] = (),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        """Retain instance-scoped callbacks and lifecycle state without opening a client."""
         self._config = config
         self._clock = clock
         self._client: Any = None
@@ -387,6 +400,8 @@ class MatrixSession:
         self._sync_failure: Exception | None = None
         self._message_callback = message_callback
         self._typing_callback = typing_callback
+        self._durable_owner: Any = None
+        self._batch_consumer: MatrixBatchConsumer | None = None
         self._admission_callback = admission_callback
         self._checkpoint_loader = checkpoint_loader
         self._checkpoint_committer = checkpoint_committer
@@ -416,8 +431,7 @@ class MatrixSession:
         self._room_key_request_inflight_rejected: int = 0
         self._room_key_request_window: deque[float] = deque()
         self._room_key_request_tasks: dict[str, asyncio.Task[None]] = {}
-        # Consecutive Classic Sync acknowledgements deferred because nio
-        # recovery work was still active at ack time (campaign F4).
+        # Retained compatibility diagnostic; durable batches do not use Classic acknowledgements.
         self._classic_ack_deferrals: int = 0
         # Stable-native Matrix media fetch deferrals persisted separately
         # from the Classic Sync cursor.
@@ -714,18 +728,131 @@ class MatrixSession:
         self._cross_signing_diagnostics = MatrixCrossSigningDiagnostics()
 
         mode = self._config.encryption_mode
-        if mode == "e2ee_required":
+        if self._durable_sync_enabled:
+            await self._start_durable()
+        elif mode == "e2ee_required":
             await self._start_e2ee_required()
         elif mode == "e2ee_optional":
             await self._start_e2ee_optional()
         else:
             await self._start_plaintext()
 
+    async def _close_client(self, client: Any) -> None:
+        """Release the SDK stream lease before its HTTP and ordinary store."""
+        owner = self._durable_owner
+        try:
+            if owner is not None and owner.client is client:
+                await owner.close()
+        finally:
+            await close_matrix_client(client, self._logger)
+
+    async def _start_durable(
+        self, *, start_sync: bool = True, known_device_id: str | None = None
+    ) -> None:
+        """Attach one durable SDK owner before any crypto or sync operation."""
+        if not _compat_mod.HAS_E2EE:
+            raise MatrixConnectionError(
+                "Matrix durable sync requires the installed crypto backend; "
+                "reinstall medre-adapter-matrix with its declared dependencies"
+            )
+        if not self._config.store_path:
+            raise MatrixConnectionError(
+                "Matrix durable sync requires a persistent store_path"
+            )
+        import nio
+
+        # restore_login only loads an ordinary store when store_path is set.
+        # Durable adoption must attach the fresh client before any store loads.
+        self._client = nio.AsyncClient(
+            homeserver=self._config.homeserver,
+            user=self._config.user_id,
+            device_id=self._config.device_id,
+            store_path=None,
+            config=self._build_client_config(nio, encryption_enabled=True),
+        )
+        self._attach_managed_auth()
+        device_id = (
+            known_device_id
+            or self._config.device_id
+            or await self._discover_device_id()
+        )
+        token = (
+            await self._oauth_manager.access_token()
+            if self._oauth_manager is not None
+            else self._config.access_token
+        )
+        self._client.restore_login(self._config.user_id, device_id, token)
+        await self._load_classic_checkpoint()
+        self._durable_owner = open_sync(
+            self._client,
+            adapter_id=self._config.adapter_id,
+            homeserver=self._config.homeserver,
+            store_path=Path(self._config.store_path),
+            sync_timeout_ms=self._config.sync_timeout_ms,
+            legacy_cursor=self._committed_sync_token,
+            managed_session=(
+                self._oauth_manager.session if self._oauth_manager is not None else None
+            ),
+        )
+        self._batch_consumer = MatrixBatchConsumer(
+            self._durable_owner,
+            accept_loss=self._accept_sync_loss,
+            accepted=self._accept_sync_batch,
+            acknowledged=self._on_batch_acknowledged,
+        )
+        self._crypto_store_loaded = True
+        self._crypto_enabled = self._config.encryption_mode != "plaintext"
+        if self._crypto_enabled:
+            await self._reconcile_cross_signing_runtime()
+        await self._finalize_start(start_sync=start_sync)
+
+    async def _on_committed_nio_event(self, room: Any, event: Any) -> None:
+        """Carry committed event-time provenance through SDK callback dispatch."""
+        record = current_record.get()
+        if record is None or record.kind != "timeline" or record.provenance is None:
+            raise RuntimeError("Matrix admission requires a committed timeline record")
+        await self._on_nio_admission(room, event, record.provenance)
+
+    async def _accept_sync_loss(self, record: Any) -> None:
+        """Keep gap-loss evidence until it is persisted with the accepted batch."""
+        room_id, reason = record.room_id, record.source.get("reason")
+        if not isinstance(room_id, str) or not isinstance(reason, str) or not reason:
+            raise ValueError("invalid Matrix recovery loss record")
+        reasons = set(self._recovery_abandoned_rooms.get(room_id, ()))
+        reasons.add(reason)
+        self._recovery_abandoned_rooms[room_id] = tuple(sorted(reasons))
+        self._recovery_last_abandonment = self._abandonment_diagnostic(
+            self._recovery_abandoned_rooms
+        )
+        self._logger.warning(
+            "Matrix gap recovery recorded unavailable history: %s", reason
+        )
+
+    async def _accept_sync_batch(self, batch: Any) -> None:
+        """Persist application evidence after admission and before SDK acknowledgement."""
+        committer = self._checkpoint_committer
+        if committer is None or self._stop_requested:
+            raise DurableIngressDeferredError("matrix-sync-batch", ("shutdown",))
+        metadata = json.dumps(
+            {"schema_version": 1, "abandoned_rooms": self._recovery_abandoned_rooms},
+            sort_keys=True,
+        )
+        await committer("nio_durable", f"{batch.stream_id}:{batch.sequence}", metadata)
+
+    def _on_batch_acknowledged(self, batch: Any) -> None:
+        """Expose progress only after the SDK commits its acknowledgement."""
+        self._last_successful_sync = self._clock()
+        self._reconnect_attempts = 0
+        self._last_reconnect_error = None
+        if batch.completes_sync:
+            self._initial_sync_done = True
+            self._live_sync_started = True
+
     def _build_client_config(self, nio_module: Any, *, encryption_enabled: bool) -> Any:
         """Build the pinned mindroom-nio sync and peer-device trust policy.
 
-        MEDRE owns durable Classic Sync checkpoints when storage callbacks are
-        available. Provider timeout retries are disabled (``max_timeouts=0``) so
+        The durable SDK owner controls its cursor; MEDRE controls batch admission.
+        Provider timeout retries are disabled (``max_timeouts=0``) so
         timeouts surface promptly to MEDRE's owning application boundary: sync
         supervision, delivery lifecycle, key-recovery loop, or startup failure
         handling. Homeserver 429 handling remains SDK-owned.
@@ -741,9 +868,7 @@ class MatrixSession:
         config = nio_module.AsyncClientConfig(
             encryption_enabled=encryption_enabled,
             max_timeouts=0,
-            backfill_limited_timelines=self._durable_sync_enabled,
             store_sync_tokens=not self._durable_sync_enabled,
-            backfill_persist_recovery=False,
         )
         if not encryption_enabled or not hasattr(config, "replace_rotated_device_keys"):
             return config
@@ -863,7 +988,7 @@ class MatrixSession:
         if not getattr(self._client, "logged_in", False):
             # Partial startup cleanup: close client on login failure.
             try:
-                await close_matrix_client(self._client, self._logger)
+                await self._close_client(self._client)
             except Exception:
                 pass
             self._client = None
@@ -902,7 +1027,7 @@ class MatrixSession:
         if not self._crypto_enabled and self._config.encryption_mode == "e2ee_required":
             if self._client:
                 try:
-                    await close_matrix_client(self._client, self._logger)
+                    await self._close_client(self._client)
                 except Exception:
                     pass
                 self._client = None
@@ -991,7 +1116,7 @@ class MatrixSession:
                 # Clean up any partial client from failed crypto start
                 if self._client is not None:
                     try:
-                        await close_matrix_client(self._client, self._logger)
+                        await self._close_client(self._client)
                     except Exception:
                         pass
                     self._client = None
@@ -1182,32 +1307,7 @@ class MatrixSession:
         await self._message_callback(normalized)
 
     async def _on_nio_admission(self, room: Any, event: Any, provenance: Any) -> None:
-        """Durably admit a nio timeline event before ordinary callback fanout.
-
-        Exception taxonomy (per mindroom-nio contract):
-        * :class:`medre.core.ingress.types.DurableIngressDeferredError` —
-          raised by the durable admission callback when an event must
-          remain pending for a later cycle (capacity, shutdown).  We
-          translate this into ``CallbackNotAcceptedError`` so nio keeps
-          the event pending and redispatches on the next sync loop /
-          recovery pump.  See
-          ``nio/client/async_client.py:1305-1326`` (``_dispatch_timeline_event``)
-          and ``nio/client/sync_recovery.py:1707-1718`` (``_finish_recovery_dispatch``):
-          both branches catch ``CallbackNotAcceptedError`` and propagate
-          it as ``_LiveCallbackError(..., accepted=False)``, which tells
-          nio the event is not yet consumed.
-        * Anything else — programming errors (AttributeError, TypeError,
-          unsupported provenance), unexpected storage failures (sqlite
-          write errors), or any other ``Exception`` — must NOT masquerade
-          as deferral.  We log via ``logger.exception`` (with an
-          explicit marker) and re-raise the **original** exception.
-          nio wraps it in ``_LiveCallbackError(..., accepted=True)``
-          (``async_client.py:1314-1318``) for the live path or logs and
-          drops it (``sync_recovery.py:1711-1716``) for the recovered
-          path.  Either way, the event is consumed and will not be
-          redispatched indefinitely, surfacing the underlying bug to the
-          operator instead of looping forever.
-        """
+        """Admit a committed SDK record; failures leave its batch unacknowledged."""
         if self._admission_callback is None:
             return
         normalized = self._normalize_event(room, event)
@@ -1254,41 +1354,16 @@ class MatrixSession:
                         self._logger.exception(
                             "Failed to persist Matrix attachment fetch deferral"
                         )
-                rejection = self._resolve_callback_not_accepted_error()
-                if rejection is None:
-                    raise exc from None
-                raise rejection(str(exc)) from exc
-            # Other expected deferrals retain their existing unbounded
-            # ownership semantics; only attachment acquisition has a separate
-            # fixed retry budget.
+                raise
             if isinstance(exc, DurableIngressDeferredError):
-                rejection = self._resolve_callback_not_accepted_error()
-                if rejection is None:
-                    raise exc from None
-                raise rejection(str(exc)) from exc
-            # Unexpected failure — surface to the operator and re-raise
-            # the original exception so nio wraps it in
-            # ``_LiveCallbackError(accepted=True)`` (live) or logs+drops
-            # (recovered).  Do NOT translate to CallbackNotAcceptedError;
-            # that would loop forever.
+                raise
+            # Unexpected failures fail the consumer visibly without discarding
+            # the committed native record. Restart can replay it after repair.
             self._logger.exception(
                 "MATRIX_ADMISSION_UNEXPECTED_ERROR: provenance=%s event_id=%s",
                 provenance_value,
                 getattr(event, "event_id", None),
             )
-            unexpected_key = self._attachment_fetch_deferral_key(normalized)
-            if unexpected_key is not None:
-                # The event is consumed either way and will not be
-                # redispatched, so its deferral entry is dead state.
-                try:
-                    await self._prune_attachment_fetch_deferral(unexpected_key)
-                except Exception:
-                    # Cleanup must never replace the admission exception that
-                    # determines nio's accepted/consumed callback semantics.
-                    self._logger.warning(
-                        "Failed to prune Matrix attachment fetch deferral",
-                        exc_info=True,
-                    )
             raise
 
     @staticmethod
@@ -1321,14 +1396,7 @@ class MatrixSession:
             await self._persist_attachment_fetch_deferrals()
 
     async def _prune_attachment_fetch_deferral(self, key: str) -> None:
-        """Forget retry state when an event is consumed without admission.
-
-        nio consumes an event whose admission callback raised an unexpected
-        error (live events are wrapped as accepted; recovered events are
-        logged and dropped), and events abandoned by gap recovery are never
-        redispatched either.  Such an entry would otherwise persist until
-        the size cap evicts it.
-        """
+        """Prune explicitly retired retry state while retaining bounded failure evidence."""
         async with self._attachment_fetch_deferral_lock:
             if key not in self._attachment_fetch_deferrals:
                 return
@@ -1417,36 +1485,6 @@ class MatrixSession:
         return result
 
     @staticmethod
-    def _resolve_callback_not_accepted_error() -> Any | None:
-        """Return ``nio.CallbackNotAcceptedError`` if mindroom-nio exposes it.
-
-        Resolves both the top-level ``nio`` symbol (used by older nio
-        versions) and the ``nio.exceptions`` location (canonical
-        mindroom-nio 0.40 layout).  Returns ``None`` only when nio is
-        not importable at all, in which case ``_on_nio_admission`` must
-        re-raise the original ``DurableIngressDeferredError`` because
-        we have no way to translate it.
-        """
-        try:
-            import nio
-        except ImportError:
-            try:
-                from nio.exceptions import CallbackNotAcceptedError
-
-                return CallbackNotAcceptedError
-            except ImportError:
-                return None
-        rejection = getattr(nio, "CallbackNotAcceptedError", None)
-        if rejection is not None:
-            return rejection
-        try:
-            from nio.exceptions import CallbackNotAcceptedError
-
-            return CallbackNotAcceptedError
-        except ImportError:
-            return None
-
-    @staticmethod
     def _abandonment_diagnostic(
         abandoned: dict[str, tuple[str, ...]],
     ) -> str | None:
@@ -1461,45 +1499,6 @@ class MatrixSession:
             {"causes": cause_counts, "room_count": len(abandoned)},
             sort_keys=True,
             separators=(",", ":"),
-        )
-
-    @staticmethod
-    def _classic_ack_recovery_busy(client: Any) -> bool:
-        """Return whether pinned nio has explicit Classic recovery work pending.
-
-        The SDK uses the same LocalProtocolError text for several staged-state
-        mismatches. Only active recovery dispatches, real recovery gaps, or
-        deferred recovery callback errors are safe acknowledgement deferrals;
-        token/staged-state mismatches must still fail loudly.
-        """
-        recovery = getattr(client, "_recovery", None)
-        if recovery is None:
-            return False
-
-        def _nonempty(value: object) -> bool:
-            return isinstance(value, (dict, list, set, tuple, frozenset)) and bool(
-                value
-            )
-
-        return any(
-            _nonempty(getattr(recovery, name, None))
-            for name in ("_active_dispatches", "gaps", "_deferred_dispatch_errors")
-        )
-
-    @staticmethod
-    def _is_classic_ack_deferral_error(exc: BaseException) -> bool:
-        """Return whether *exc* is nio's staged Classic-ack mismatch.
-
-        The Matrix SDK is optional, so the default runtime/test surface must
-        not import ``nio`` merely to classify an exception object that the
-        client already raised.  Match the SDK's public exception name plus
-        the specific staged-token contract instead of swallowing unrelated
-        ``LocalProtocolError`` failures.
-        """
-        return (
-            type(exc).__name__ == "LocalProtocolError"
-            and str(exc)
-            == "Classic Sync acknowledgement token does not match the staged response."
         )
 
     async def _on_room_send_error_response(self, response: Any) -> None:
@@ -1533,7 +1532,7 @@ class MatrixSession:
         raise _RoomRateLimitIntercept(response)
 
     async def _on_sync_response(self, response: Any) -> None:
-        """Commit MEDRE's Classic cursor, then acknowledge it to nio."""
+        """Record successful ordinary sync progress for standalone sessions."""
         next_batch = getattr(response, "next_batch", None)
         if not isinstance(next_batch, str) or not next_batch:
             return
@@ -1544,65 +1543,6 @@ class MatrixSession:
             existing = set(merged.get(room_id, ()))
             existing.update(reasons)
             merged[room_id] = tuple(sorted(existing))
-        metadata_json = json.dumps(
-            {"abandoned_rooms": merged},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-        if self._durable_sync_enabled:
-            client = self._client
-            if client is None or self._stop_requested:
-                return
-            committer = self._checkpoint_committer
-            if committer is None:
-                raise RuntimeError("durable Matrix sync has no checkpoint committer")
-            await committer("classic_sync", next_batch, metadata_json)
-            # An empty Classic response (``next_batch`` unchanged) stages no
-            # new SDK state: there is nothing to acknowledge, and the pinned
-            # SDK rejects an acknowledgement for an unstaged token.  The
-            # checkpoint commit above remains correct and idempotent.
-            if not getattr(client, "has_uncommitted_classic_sync_state", False):
-                self._committed_sync_token = next_batch
-                self._classic_ack_deferrals = 0
-            else:
-                try:
-                    client.acknowledge_classic_sync(next_batch)
-                    self._classic_ack_deferrals = 0
-                except Exception as exc:
-                    if not (
-                        self._is_classic_ack_deferral_error(exc)
-                        and self._classic_ack_recovery_busy(client)
-                    ):
-                        raise
-                    # Campaign F4 (run4): recovery dispatches
-                    # (undecryptable-event room-key work) were still active
-                    # when the acknowledgement ran, so nio rejects the token.
-                    # The durable checkpoint is already committed — deferring
-                    # the acknowledgement to a later quiet response is
-                    # contract-correct, while letting the error propagate
-                    # needlessly restarts the outer sync supervisor.  nio
-                    # keeps the staged state bookkeeping-only until the next
-                    # successful acknowledgement.
-                    self._classic_ack_deferrals += 1
-                    self._logger.warning(
-                        "Matrix Classic sync acknowledgement deferred (%d "
-                        "consecutive): durable checkpoint committed, nio "
-                        "recovery work still active",
-                        self._classic_ack_deferrals,
-                    )
-                self._committed_sync_token = next_batch
-            if abandoned:
-                settle = getattr(client, "acknowledge_unrecovered_rooms", None)
-                if callable(settle):
-                    try:
-                        settle(abandoned)
-                    except Exception:
-                        self._logger.warning(
-                            "Failed to settle recorded Matrix recovery abandonment",
-                            exc_info=True,
-                        )
-
         self._recovery_abandoned_rooms = merged
         self._recovery_last_abandonment = self._abandonment_diagnostic(merged)
         if abandoned:
@@ -1631,18 +1571,30 @@ class MatrixSession:
         loader = self._checkpoint_loader
         if loader is None:
             raise RuntimeError("durable Matrix sync has no checkpoint loader")
-        checkpoint = await loader("classic_sync")
+        legacy = await loader("classic_sync")
+        durable_checkpoint = await loader("nio_durable")
+        checkpoint = durable_checkpoint or legacy
         await self._load_attachment_fetch_deferrals()
-        self._committed_sync_token = (
-            checkpoint.cursor if checkpoint is not None else None
-        )
+        self._committed_sync_token = legacy.cursor if legacy is not None else None
         self._recovery_abandoned_rooms = {}
         self._recovery_last_abandonment = None
+        if durable_checkpoint is not None and not durable_checkpoint.metadata_json:
+            raise MatrixConnectionError("Invalid Matrix durable checkpoint evidence")
         if checkpoint is not None and checkpoint.metadata_json:
             try:
                 stored = json.loads(checkpoint.metadata_json)
                 if not isinstance(stored, dict):
                     raise ValueError("checkpoint metadata must be an object")
+                if durable_checkpoint is not None and (
+                    type(stored.get("schema_version")) is not int
+                    or stored.get("schema_version") != 1
+                ):
+                    raise ValueError("unsupported Matrix durable checkpoint version")
+                if durable_checkpoint is not None and set(stored) != {
+                    "schema_version",
+                    "abandoned_rooms",
+                }:
+                    raise ValueError("invalid durable checkpoint fields")
                 raw_rooms = stored.get("abandoned_rooms", {})
                 if not isinstance(raw_rooms, dict):
                     raise ValueError("abandoned_rooms must be an object")
@@ -1655,25 +1607,21 @@ class MatrixSession:
                     restored[str(room_id)] = tuple(sorted(reasons))
                 self._recovery_abandoned_rooms = restored
                 self._recovery_last_abandonment = self._abandonment_diagnostic(restored)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError) as error:
+                if durable_checkpoint is not None:
+                    raise MatrixConnectionError(
+                        "Invalid Matrix durable checkpoint evidence"
+                    ) from error
                 self._logger.warning(
                     "Ignoring malformed Matrix checkpoint recovery metadata"
                 )
-        client = self._client
-        clear_recovery = (
-            getattr(client, "clear_persisted_sync_recovery", None)
-            if client is not None
-            else None
-        )
-        if callable(clear_recovery) and getattr(client, "store", None) is not None:
-            clear_recovery()
 
-    async def _finalize_start(self) -> None:
+    async def _finalize_start(self, *, start_sync: bool = True) -> None:
         """Common post-client-creation steps: validate login, register callbacks, start sync task."""
         if not getattr(self._client, "logged_in", False):
             # Partial startup cleanup: close client on login failure.
             try:
-                await close_matrix_client(self._client, self._logger)
+                await self._close_client(self._client)
             except Exception:
                 pass
             self._client = None
@@ -1685,17 +1633,7 @@ class MatrixSession:
         import nio
 
         if self._typing_callback is not None:
-            if self._durable_sync_enabled:
-                # Pinned nio suppresses ordinary ephemeral callbacks during
-                # limited-timeline recovery. Read only this live sync response;
-                # activity never enters recovery/admission or checkpoint state.
-                self._client.add_response_callback(
-                    self._on_typing_sync_response, nio.SyncResponse
-                )
-            else:
-                self._client.add_ephemeral_callback(
-                    self._on_typing, nio.TypingNoticeEvent
-                )
+            self._client.add_ephemeral_callback(self._on_typing, nio.TypingNoticeEvent)
 
         message_classes: tuple[Any, ...] = tuple(
             dict.fromkeys(
@@ -1715,8 +1653,8 @@ class MatrixSession:
         admission_classes = message_classes + relation_event_classes
 
         if self._durable_sync_enabled and self._admission_callback is not None:
-            self._client.add_event_admission_callback(
-                self._on_nio_admission, admission_classes
+            self._client.add_event_callback(
+                self._on_committed_nio_event, admission_classes
             )
         elif self._message_callback is not None:
             self._client.add_event_callback(self._on_nio_event, message_classes)
@@ -1726,7 +1664,7 @@ class MatrixSession:
                 )
 
         sync_response_cls = getattr(nio, "SyncResponse", None)
-        if sync_response_cls is not None:
+        if sync_response_cls is not None and not self._durable_sync_enabled:
             self._client.add_response_callback(
                 self._on_sync_response, sync_response_cls
             )
@@ -1745,7 +1683,8 @@ class MatrixSession:
             self._client.add_response_callback(
                 self._on_upload_error_response, upload_error_cls
             )
-        await self._load_classic_checkpoint()
+        if not self._durable_sync_enabled:
+            await self._load_classic_checkpoint()
 
         # Register MegolmEvent callback for undecryptable encrypted events.
         self._register_megolm_callback()
@@ -1753,13 +1692,16 @@ class MatrixSession:
         # Register invite callback for auto-join.
         self._register_invite_callback()
 
+        if not start_sync:
+            return
+
         sync_coro = self._run_sync()
         try:
             self._sync_task = asyncio.create_task(sync_coro)
         except Exception as exc:
             sync_coro.close()
             try:
-                await close_matrix_client(self._client, self._logger)
+                await self._close_client(self._client)
             except Exception:
                 pass
             self._client = None
@@ -2291,8 +2233,8 @@ class MatrixSession:
     async def _run_sync_forever_attempt(self) -> None:
         """Run one nio sync loop under MEDRE's stale-progress deadline.
 
-        ``sync_forever`` remains the sole Matrix request/event loop.  MEDRE
-        observes only durable sync progress.  On staleness, the current loop is
+        nio.durable owns production capture and recovery. MEDRE observes
+        accepted batches; standalone callback sessions use ordinary sync.  On staleness, the current loop is
         stopped and cancelled before the outer supervisor may start another,
         preventing overlapping nio sync owners.
         """
@@ -2300,16 +2242,18 @@ class MatrixSession:
         if client is None:
             raise RuntimeError("Matrix sync requested without a client")
 
-        task = asyncio.create_task(
-            client.sync_forever(
-                timeout=self._config.sync_timeout_ms,
-                since=self._committed_sync_token,
-                # A saved cursor resumes events, not the fresh client's room
-                # membership/encryption cache. Request full state until this
-                # client has completed its first successful sync.
-                full_state=not self._initial_sync_done,
+        if self._durable_sync_enabled:
+            if self._batch_consumer is None:
+                raise RuntimeError("Matrix durable consumer is unavailable")
+            task = asyncio.create_task(self._batch_consumer.run())
+        else:
+            task = asyncio.create_task(
+                client.sync_forever(
+                    timeout=self._config.sync_timeout_ms,
+                    since=self._committed_sync_token,
+                    full_state=not self._initial_sync_done,
+                )
             )
-        )
         stale_timeout = float(self._config.sync_stale_timeout_seconds)
         started_at = self._clock()
         try:
@@ -2395,7 +2339,7 @@ class MatrixSession:
         mindroom-nio owns request execution, key sequencing, timeline
         parsing/decryption, limited-timeline recovery, and event provenance.
         MEDRE owns timeout-level restart/liveness, capped reconnect backoff,
-        and the committed cursor. Transient failures retry for the lifetime of
+        and semantic batch acceptance. Transient failures retry for the lifetime of
         the started adapter; an unsafe stale-owner recycle still fails closed.
         """
         while not self._stop_requested:
@@ -2433,23 +2377,43 @@ class MatrixSession:
                     self._reconnecting = False
                     return
 
-                try:
-                    if self._durable_sync_enabled:
-                        if getattr(
-                            self._client, "has_uncommitted_classic_sync_state", False
-                        ):
-                            await self._client.reset_classic_sync_state()
-                        self._client.next_batch = self._committed_sync_token
-                except asyncio.CancelledError:
-                    raise
-                except Exception as reset_exc:
-                    self._logger.error(
-                        "Failed to reset uncommitted Matrix sync state: %s",
-                        reset_exc,
-                    )
-                    self._sync_failure = reset_exc
-                    self._reconnecting = False
-                    return
+                owner_active = False
+                if self._durable_sync_enabled and self._durable_owner is not None:
+                    try:
+                        # Public access verifies that preparation did not retire
+                        # the client. Transport-only failures retain a valid
+                        # owner and need no crypto setup or account query.
+                        _ = self._durable_owner.cursor
+                        owner_active = True
+                    except Exception:
+                        pass
+                if self._durable_sync_enabled and not owner_active:
+                    try:
+                        device_id = self._client.device_id
+                        deadline = time.monotonic() + 5.0
+                        tasks = [
+                            *self._room_key_request_tasks.values(),
+                            *self._joining_rooms.values(),
+                        ]
+                        self._room_key_request_tasks.clear()
+                        self._joining_rooms.clear()
+                        await self._cancel_tasks_with_deadline(
+                            tasks, deadline=deadline, label="SDK generation"
+                        )
+                        await self._close_client(self._client)
+                        await self._start_durable(
+                            start_sync=False, known_device_id=device_id
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as reopen_error:
+                        self._sync_failure = reopen_error
+                        self._last_reconnect_error = str(reopen_error)
+                        self._reconnecting = False
+                        self._logger.error(
+                            "Matrix durable generation could not reopen", exc_info=True
+                        )
+                        return
 
                 self._reconnect_attempts += 1
                 self._last_reconnect_error = str(exc)
@@ -2699,7 +2663,7 @@ class MatrixSession:
 
         if self._client is not None:
             client = self._client
-            close_task = asyncio.create_task(close_matrix_client(client, self._logger))
+            close_task = asyncio.create_task(self._close_client(client))
             remaining = max(0.0, deadline - time.monotonic())
             try:
                 done, _pending = await asyncio.wait({close_task}, timeout=remaining)
@@ -3035,17 +2999,6 @@ class MatrixSession:
             return
         raise _RoomRateLimitIntercept(response)
 
-    async def _on_typing_sync_response(self, response: Any) -> None:
-        """Project live sync ephemera when nio owns durable timeline recovery."""
-        from nio import TypingNoticeEvent
-
-        if self._typing_callback is None:
-            return
-        for room_id, info in response.rooms.join.items():
-            for event in info.ephemeral:
-                if isinstance(event, TypingNoticeEvent):
-                    await self._typing_callback(room_id, event.users)
-
     async def _on_typing(self, room: Any, event: Any) -> None:
         """Forward live ephemeral state outside durable timeline admission callbacks."""
         if self._typing_callback is not None:
@@ -3183,10 +3136,11 @@ class MatrixSession:
         material.
         """
         # Compute E2EE diagnostics from live client state.
-        # Only inspect nio crypto internals when crypto is enabled;
-        # in plaintext mode (or with mock clients that auto-create
-        # attributes) these would give false positives.
-        if self._crypto_enabled and self._client is not None:
+        # Durable plaintext sessions also own real crypto storage. Ordinary
+        # plaintext test doubles must not fabricate loaded-backend evidence.
+        if (
+            self._crypto_enabled or self._durable_owner is not None
+        ) and self._client is not None:
             olm_loaded = self._client.olm is not None
             store_loaded = self._client.store is not None
             device_keys_uploaded = (
@@ -3250,8 +3204,14 @@ class MatrixSession:
             stale_sync_recoveries=self._stale_sync_recoveries,
             last_stale_sync_at=self._last_stale_sync_at,
             last_successful_sync=self._last_successful_sync,
-            checkpoint_owned_by_medre=self._durable_sync_enabled,
-            committed_checkpoint_present=self._committed_sync_token is not None,
+            checkpoint_owned_by_medre=False,
+            committed_checkpoint_present=(
+                self._committed_sync_token is not None
+                or (
+                    self._batch_consumer is not None
+                    and self._batch_consumer.last_acked_sequence is not None
+                )
+            ),
             classic_ack_deferrals=self._classic_ack_deferrals,
             recovered_event_count=self._recovered_event_count,
             history_event_count=self._history_event_count,

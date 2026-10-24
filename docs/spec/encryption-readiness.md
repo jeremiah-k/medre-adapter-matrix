@@ -4,11 +4,14 @@ A connected, authenticated and syncing session MUST NOT report healthy when
 configured encryption is inactive. e2ee_optional MAY retain unencrypted-room
 operation, but its health MUST be degraded while crypto is unavailable.
 
-Missing dependencies MUST produce an actionable startup warning and a crypto
-error diagnostic naming the matrix[e2e] installation. Unsuccessful initialization
-MUST also be visible when setup returns without an active Olm/store pair.
+Production durable sync MUST require the SQLite crypto backend, including for
+plaintext rooms. Missing backend dependencies MUST fail startup with an
+installation diagnosis. The matrix[e2e] extra remains an installation alias;
+the base provider includes the backend. A connected standalone optional session
+MUST report inactive encryption through its health and startup diagnostics.
 
-Encrypted-room sends MUST remain refused whenever crypto is inactive. Optional
+Encrypted-room sends MUST remain refused whenever crypto is inactive. Plaintext policy MUST filter encrypted-room or decrypted-message ingress before
+canonical admission, even when the SDK backend can decrypt it. Optional
 mode MUST NOT authorize downgrading encrypted-room content to plaintext.
 e2ee_required retains its fail-closed startup behavior. Credential identity and
 cross-signing reset policy remain independent of package installation.

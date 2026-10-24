@@ -630,7 +630,7 @@ async def test_admission_without_native_identity_skips_deferral_tracking(
         },
     )
 
-    with pytest.raises(rejection):
+    with pytest.raises(MatrixAttachmentFetchDeferredError):
         await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
 
     # No stable native identity means no deferral state was recorded.
