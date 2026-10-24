@@ -10,9 +10,8 @@ including empty lists. The adapter MUST use the core snapshot contract rather
 than maintain a parallel actor cache. Actor claims MUST remain unverified native
 identifiers; outgoing activity MUST use the configured relay account.
 
-SDK ordinary ephemeral callbacks apply without durable recovery. With the pinned
-SDK's durable timeline recovery enabled, typing MUST come directly from live
-SyncResponse ephemera rather than deferred recovery callbacks. Recovered timeline
+SDK ephemeral callbacks MUST carry only the live response's transient sections.
+The durable SDK owner MUST NOT replay typing from committed timeline batches. Recovered timeline
 content MUST NOT be reinterpreted as fresh composing state. Typing MUST NOT enter
 canonical admission, checkpoint state, durable outbox work or receipts.
 

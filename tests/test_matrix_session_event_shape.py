@@ -216,6 +216,7 @@ async def test_session_registers_media_and_redaction_callbacks(
 async def test_session_registers_durable_admission_for_all_supported_events(
     mock_nio: Any,
 ) -> None:
+    """Register committed-record admission for messages, media and relations."""
     media_classes = {
         "RoomMessageImage": type("RoomMessageImage", (), {}),
         "RoomMessageAudio": type("RoomMessageAudio", (), {}),
@@ -249,9 +250,14 @@ async def test_session_registers_durable_admission_for_all_supported_events(
         checkpoint_committer=commit,
     )
     try:
-        await session.start()
+        session._client = mock_nio.AsyncClient.return_value
+        await session._finalize_start(start_sync=False)
         client = mock_nio.AsyncClient.return_value
-        calls = client.add_event_admission_callback.call_args_list
+        calls = [
+            call
+            for call in client.add_event_callback.call_args_list
+            if call.args[0] == session._on_committed_nio_event
+        ]
         assert len(calls) == 1
         registered = tuple(calls[0].args[1])
         expected = (

@@ -349,12 +349,31 @@ async def test_policy_drop_does_not_stall_sync_checkpoint() -> None:
     )
     assert admitted == []
 
-    response = SimpleNamespace(next_batch="batch-42")
-    await asyncio.wait_for(session._on_sync_response(response), timeout=2.0)
+    response = SimpleNamespace(stream_id="stream", sequence=42, completes_sync=True)
+    await asyncio.wait_for(session._accept_sync_batch(response), timeout=2.0)
 
     assert len(checkpoints) == 1
     stream, cursor, _metadata = checkpoints[0]
-    assert stream == "classic_sync"
-    assert cursor == "batch-42"
-    client.acknowledge_classic_sync.assert_called_once_with("batch-42")
-    assert session._committed_sync_token == "batch-42"
+    assert stream == "nio_durable"
+    assert cursor == "stream:42"
+    client.acknowledge_classic_sync.assert_not_called()
+
+
+@pytest.mark.parametrize("evidence", ["room", "decrypted", "tracked"])
+async def test_plaintext_policy_filters_encrypted_ingress_before_admission(evidence):
+    """An active SDK crypto backend must not expand plaintext ingress authority."""
+    adapter, session, _client, admitted, checkpoints = _wire_ingress(
+        encryption_mode="plaintext", require_encrypted_rooms=False
+    )
+    room = SimpleNamespace(room_id=_ROOM, encrypted=evidence == "room")
+    event = make_fake_nio_event()
+    event.decrypted = evidence == "decrypted"
+    if evidence == "tracked":
+        session._room_states[_ROOM] = "encrypted"
+    await session._on_nio_admission(room, event, "live")
+    assert admitted == []
+    assert adapter._inbound_filtered_encryption_policy == 1
+    await session._accept_sync_batch(
+        SimpleNamespace(stream_id="stream", sequence=1, completes_sync=True)
+    )
+    assert len(checkpoints) == 1

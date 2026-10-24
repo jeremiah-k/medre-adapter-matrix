@@ -46,6 +46,10 @@ async def test_startup_sync_durably_admits_before_start_returns(
     ctx.admit_inbound = admit
 
     class StartupSession:
+        def is_room_encrypted(self, room_id: str) -> bool:
+            """Startup admission uses an unencrypted native room."""
+            return False
+
         closed = False
         last_sync_error = None
 
@@ -88,6 +92,10 @@ async def test_legacy_startup_callback_remains_suppressed(monkeypatch):
     published, ctx = make_adapter_context()
 
     class StartupSession:
+        def is_room_encrypted(self, room_id: str) -> bool:
+            """Startup admission uses an unencrypted native room."""
+            return False
+
         closed = False
         last_sync_error = None
 

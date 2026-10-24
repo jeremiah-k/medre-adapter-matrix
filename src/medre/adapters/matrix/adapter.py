@@ -1226,6 +1226,25 @@ class MatrixAdapter(AdapterContract):
                 self._inbound_filtered_allowlist += 1
                 return
 
+        # SDK storage needs crypto even under plaintext policy; backend ability
+        # to decrypt must not authorize forwarding encrypted-room content.
+        encrypted_ingress = (
+            event.get("room_encrypted") is True
+            or event.get("event_encrypted") is True
+            or event.get("decrypted") is True
+            or (
+                self._session is not None
+                and self._session.is_room_encrypted(room_id) is True
+            )
+        )
+        if self._config.encryption_mode == "plaintext" and encrypted_ingress:
+            self._inbound_filtered_encryption_policy += 1
+            self.ctx.logger.debug(
+                "MatrixAdapter %s: plaintext policy filtered encrypted ingress",
+                self.adapter_id,
+            )
+            return
+
         # Encrypted-room-only policy: when require_encrypted_rooms is set,
         # events from rooms not established as encrypted are dropped before
         # decode or durable admission.  Room authority is the normalized
@@ -1702,12 +1721,7 @@ class MatrixAdapter(AdapterContract):
             "stale_sync_recoveries": 0,
             "last_stale_sync_at": None,
             "last_successful_sync": None,
-            "checkpoint_owned_by_medre": bool(
-                self.ctx is not None
-                and self.ctx.admit_inbound is not None
-                and self.ctx.load_checkpoint is not None
-                and self.ctx.commit_checkpoint is not None
-            ),
+            "checkpoint_owned_by_medre": False,
             "committed_checkpoint_present": False,
             "classic_ack_deferrals": 0,
             "recovered_event_count": 0,

@@ -15,7 +15,10 @@ medre adapters install matrix
 medre adapters
 ```
 
-For Matrix E2EE, request the optional `e2e` extra: `medre adapters install 'matrix[e2e]'`.
+Matrix requires Python 3.12+ and includes its durable SQLite/crypto backend.
+The `matrix[e2e]` spelling remains a compatible installation alias.
+The released mindroom-nio 1.1.5 store requires POSIX file leases; Windows
+production sessions require a provider release with Windows lease support.
 
 On Windows, the package-changing command prints a uv command to run **after**
 `medre.exe` exits, rather than replacing an executable still in use.
@@ -38,8 +41,8 @@ for reply, edit, truncation, and block-boundary behavior.
 ## Browser-approved Matrix login
 
 For an OAuth-enabled homeserver, authorize MEDRE from your browser instead of
-providing its account password. Install the `e2e` extra first when preparing
-an encrypted adapter:
+providing its account password. The provider includes the crypto backend;
+select the adapter whose persistent device store should be prepared:
 
 ```bash
 medre adapter matrix auth login --oauth \
@@ -95,11 +98,11 @@ adapter discovery do not depend on this repository's distribution name.
 
 ## Restart and offline messages
 
-Classic Sync resumes from MEDRE's durable checkpoint. Events received during
-startup are durably admitted before they are acknowledged, including messages
-sent while MEDRE was offline. Initial history remains suppressed from routing.
-Callbacks arriving after shutdown defer admission rather than advancing a
-checkpoint without retaining the message.
+The SDK persists captured responses, crypto state, recovery and its upstream
+cursor. MEDRE admits committed records before acknowledging their SDK batch.
+Restart replays unacknowledged records through native-ID deduplication. History
+provenance and recovery losses remain explicit; neither a saved cursor nor a
+connected client establishes successful delivery.
 
 ## Ownership and imports
 
@@ -141,9 +144,10 @@ Matrix configures the core-owned `medre adapter matrix` parser. Optional CLI
 registration failures are reported as `broken CLI contribution` without
 disabling generic help, preflight, healthy commands, or runtime discovery.
 
-A fresh Matrix session requests full room state alongside its saved event cursor.
-This restores membership names and encryption state after a process restart;
-subsequent syncs retain the incremental cursor without replaying old messages.
+Durable sync restores the SDK's persisted membership and encryption projection.
+A fresh store obtains its initial state from the homeserver; existing stores keep
+their device identity and pending batches. See the
+[durable sync contract](docs/spec/durable-sync.md) for adoption and rollback limits.
 
 Matrix event `content.medre` carries versioned canonical provenance and selected
 metadata. `metadata_embedding_mode` is destination-specific: `off` omits the
@@ -286,14 +290,19 @@ defines native scope and live-sync behavior.
 
 ## Encryption readiness
 
-Install `medre adapters install 'matrix[e2e]'` before using encrypted rooms.
-Installing the base `matrix` provider after `matrix[e2e]` requests installation
-without that extra; use the explicit extra when selecting the provider.
+Install the Matrix provider with its declared dependencies. The durable SDK
+requires its SQLite crypto backend even with encryption_mode: plaintext;
+plaintext policy continues refusing encrypted-room delivery. Missing backend
+dependencies fail production startup instead of silently selecting ordinary sync.
 
-With e2ee_optional, missing crypto dependencies or unsuccessful initialization
-leave unencrypted rooms usable and report degraded health. Startup logs and
-crypto diagnostics explain the limitation. Encrypted-room delivery remains
-refused: optional encryption never authorizes plaintext delivery into an
-encrypted room. Use e2ee_required when the adapter must fail startup instead.
-Inspect `medre diagnostics --refresh-health` after restarting. Repairing the
-installation does not require deleting credentials or resetting cross-signing.
+Encryption readiness and own-device cross-signing are separate diagnostics.
+Installing dependencies or authenticating does not recover lost account signing
+keys. Runtime never resets that identity. Inspect
+`medre diagnostics --refresh-health` after restarting.
+
+The opt-in `test_matrix_durable_runtime_live.py` proof takes explicit local
+homeserver accounts through environment variables. It runs the real MEDRE
+runtime with durable storage and a fake destination across a restart, and
+fails when native ingress fails. `MATRIX_ENCRYPTED=1` selects genuine Megolm
+traffic; use fresh account/device stores for each independent run. The core
+Synapse Docker starter can provision the isolated accounts.

@@ -1,4 +1,4 @@
-"""Installed mindroom-nio Classic Sync recovery contract guard."""
+"""Installed mindroom-nio durable batch and outbound retry contracts."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from medre_matrix_tests.helpers.sdk_contract import (
 
 
 @pytest.mark.matrix_sdk
-def test_mindroom_nio_exposes_application_owned_classic_sync_contract() -> None:
+def test_mindroom_nio_exposes_durable_batch_contract() -> None:
+    """Qualify released SDK ownership, provenance and outbound retry seams."""
     import nio
     from nio import event_provenance as provenance
 
@@ -22,9 +23,7 @@ def test_mindroom_nio_exposes_application_owned_classic_sync_contract() -> None:
     for name in (
         "max_limit_exceeded",
         "max_timeouts",
-        "backfill_limited_timelines",
         "store_sync_tokens",
-        "backfill_persist_recovery",
         "replace_rotated_device_keys",
     ):
         assert name in config_params
@@ -57,25 +56,15 @@ def test_mindroom_nio_exposes_application_owned_classic_sync_contract() -> None:
     assert is_nio_rate_limited_response(room_send_error)
     assert retry_after_seconds_from_ms(room_send_error.retry_after_ms) == 4.0
 
-    for name in (
-        "add_event_admission_callback",
-        "acknowledge_classic_sync",
-        "acknowledge_unrecovered_rooms",
-        "reset_classic_sync_state",
-        "sync_forever",
-        "stop_sync_forever",
-        "to_device",
-    ):
-        assert callable(getattr(nio.AsyncClient, name, None))
+    from nio.durable import DurableSync, open_durable_sync
 
-    assert isinstance(
-        getattr(nio.AsyncClient, "has_uncommitted_classic_sync_state", None),
-        property,
+    for name in ("run", "dispatch", "next_batch", "wait_for_work", "ack", "close"):
+        assert callable(getattr(DurableSync, name))
+    assert {"consumer_id", "store_path", "source_store_class"} <= set(
+        inspect.signature(open_durable_sync).parameters
     )
-    admission_params = inspect.signature(
-        nio.AsyncClient.add_event_admission_callback
-    ).parameters
-    assert len(admission_params) == 3  # self + callback + event classes
+    assert "backfill_limited_timelines" not in config_params
+    assert not hasattr(nio.AsyncClient, "add_event_admission_callback")
     assert callable(getattr(nio.events.MegolmEvent, "as_key_request", None))
     assert list(provenance.TimelineEventProvenance) == [
         provenance.TimelineEventProvenance.LIVE,

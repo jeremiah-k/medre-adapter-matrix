@@ -1,12 +1,7 @@
-"""Matrix Classic Sync checkpoint-ownership tests.
-
-These tests exercise MEDRE's side of the pinned mindroom-nio application-owned
-checkpoint contract without requiring a homeserver.
-"""
+"""Application admission, migration evidence and bounded attachment retry state."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sys
 from types import SimpleNamespace
@@ -25,26 +20,19 @@ from medre.core.ingress.types import AdapterCheckpoint
 from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 
-class LocalProtocolError(Exception):
-    """SDK-shaped test double for nio's local protocol error."""
-
-
-def _recovery_state(*, busy: bool) -> SimpleNamespace:
-    return SimpleNamespace(
-        _active_dispatches={object()} if busy else set(),
-        gaps={},
-        _deferred_dispatch_errors=[],
-    )
-
-
 def _durable_session(**overrides: object) -> MatrixSession:
+    """Supply all three host-owned ingress and checkpoint callbacks."""
+
     async def admit(_event: dict[str, object], _provenance: str) -> None:
+        """Accept the event without changing the test evidence."""
         return None
 
     async def load(_stream: str) -> AdapterCheckpoint | None:
+        """Return only the checkpoint selected by this test."""
         return None
 
     async def commit(_stream: str, _cursor: str, _metadata: str) -> None:
+        """Capture application checkpoint acceptance."""
         return None
 
     params: dict[str, object] = {
@@ -56,10 +44,12 @@ def _durable_session(**overrides: object) -> MatrixSession:
     return MatrixSession(make_matrix_config(), **params)
 
 
-def test_durable_client_config_selects_application_owned_classic_state() -> None:
+def test_durable_client_config_disables_ordinary_token_writes() -> None:
+    """Durable ownership excludes ordinary SDK sync-token persistence."""
     captured: dict[str, object] = {}
 
     def config_factory(**kwargs: object) -> object:
+        """Record the SDK settings selected by the provider."""
         captured.update(kwargs)
         return object()
 
@@ -70,16 +60,16 @@ def test_durable_client_config_selects_application_owned_classic_state() -> None
     assert captured == {
         "encryption_enabled": False,
         "max_timeouts": 0,
-        "backfill_limited_timelines": True,
         "store_sync_tokens": False,
-        "backfill_persist_recovery": False,
     }
 
 
-def test_classic_client_config_selects_nio_owned_classic_state() -> None:
+def test_standalone_client_config_enables_sdk_token_writes() -> None:
+    """Callback-only sessions retain the ordinary SDK token policy."""
     captured: dict[str, object] = {}
 
     def config_factory(**kwargs: object) -> object:
+        """Record the SDK settings selected by the provider."""
         captured.update(kwargs)
         return object()
 
@@ -90,9 +80,7 @@ def test_classic_client_config_selects_nio_owned_classic_state() -> None:
     assert captured == {
         "encryption_enabled": False,
         "max_timeouts": 0,
-        "backfill_limited_timelines": False,
         "store_sync_tokens": True,
-        "backfill_persist_recovery": False,
     }
 
 
@@ -100,20 +88,11 @@ async def test_unsupported_admission_provenance_propagates_value_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Programming-error path: unknown provenance raises ValueError that
-    propagates unchanged so nio wraps it in ``_LiveCallbackError(accepted=True)``
-    instead of looping the event forever.
+    propagates unchanged for the consumer to retain and report.
     """
-
-    class CallbackNotAcceptedError(Exception):
-        pass
 
     admission = AsyncMock()
     session = _durable_session(admission_callback=admission)
-    monkeypatch.setitem(
-        sys.modules,
-        "nio",
-        SimpleNamespace(CallbackNotAcceptedError=CallbackNotAcceptedError),
-    )
     room = SimpleNamespace(room_id="!room:example.org")
     event = SimpleNamespace(
         sender="@alice:example.org",
@@ -135,24 +114,17 @@ async def test_unsupported_admission_provenance_propagates_value_error(
     admission.assert_not_awaited()
 
 
-async def test_durable_deferred_admission_yields_callback_not_accepted(
+async def test_durable_deferred_admission_preserves_host_signal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The expected deferral signal — :class:`DurableIngressDeferredError` —
-    is translated to ``CallbackNotAcceptedError`` so nio keeps the event
-    pending for redispatch on the next sync loop or recovery pump.
-    """
+    """The batch consumer receives the original capacity deferral signal."""
     from medre.core.ingress import DurableIngressDeferredError
 
-    class CallbackNotAcceptedError(Exception):
-        pass
-
     async def defer(_event: dict[str, object], _provenance: str) -> None:
+        """Retain the native event through an explicit admission deferral."""
         raise DurableIngressDeferredError("$event", ("capacity_full",))
 
     session = _durable_session(admission_callback=defer)
-    fake_nio = SimpleNamespace(CallbackNotAcceptedError=CallbackNotAcceptedError)
-    monkeypatch.setitem(sys.modules, "nio", fake_nio)
     room = SimpleNamespace(room_id="!room:example.org")
     event = SimpleNamespace(
         sender="@alice:example.org",
@@ -166,27 +138,22 @@ async def test_durable_deferred_admission_yields_callback_not_accepted(
         },
     )
 
-    with pytest.raises(CallbackNotAcceptedError, match="capacity_full"):
+    with pytest.raises(DurableIngressDeferredError, match="capacity_full"):
         await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
 
 
 async def test_attachment_fetch_deferral_count_survives_restart_and_clears_on_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class CallbackNotAcceptedError(Exception):
-        pass
-
-    monkeypatch.setitem(
-        sys.modules,
-        "nio",
-        SimpleNamespace(CallbackNotAcceptedError=CallbackNotAcceptedError),
-    )
+    """Retain media retry counts across restart and clear them only after acceptance."""
     checkpoints: dict[str, AdapterCheckpoint] = {}
 
     async def load(stream: str) -> AdapterCheckpoint | None:
+        """Return only the checkpoint selected by this test."""
         return checkpoints.get(stream)
 
     async def commit(stream: str, cursor: str, metadata: str) -> None:
+        """Capture application checkpoint acceptance."""
         checkpoints[stream] = AdapterCheckpoint(
             adapter_id="matrix-test",
             stream=stream,
@@ -211,6 +178,7 @@ async def test_attachment_fetch_deferral_count_survives_restart_and_clears_on_ad
     seen_counts: list[int] = []
 
     async def defer(normalized: dict[str, object], _provenance: str) -> None:
+        """Retain the native event through an explicit admission deferral."""
         seen_counts.append(
             int(normalized.get(MATRIX_ATTACHMENT_FETCH_DEFERRAL_COUNT_KEY, 0))
         )
@@ -222,13 +190,14 @@ async def test_attachment_fetch_deferral_count_survives_restart_and_clears_on_ad
         checkpoint_committer=commit,
     )
     await first._load_attachment_fetch_deferrals()
-    with pytest.raises(CallbackNotAcceptedError):
+    with pytest.raises(MatrixAttachmentFetchDeferredError):
         await first._on_nio_admission(room, event, SimpleNamespace(value="live"))
     assert seen_counts == [0]
 
     accepted_counts: list[int] = []
 
     async def accept(normalized: dict[str, object], _provenance: str) -> None:
+        """Capture the retry count observed at successful admission."""
         accepted_counts.append(
             int(normalized.get(MATRIX_ATTACHMENT_FETCH_DEFERRAL_COUNT_KEY, 0))
         )
@@ -250,19 +219,14 @@ async def test_attachment_fetch_checkpoint_failure_keeps_native_event_pending(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class CallbackNotAcceptedError(Exception):
-        pass
-
-    monkeypatch.setitem(
-        sys.modules,
-        "nio",
-        SimpleNamespace(CallbackNotAcceptedError=CallbackNotAcceptedError),
-    )
+    """A failed retry-state write cannot acknowledge the native event."""
 
     async def fail_commit(_stream: str, _cursor: str, _metadata: str) -> None:
+        """Model an unavailable application evidence store."""
         raise OSError("disk full")
 
     async def defer(_event: dict[str, object], _provenance: str) -> None:
+        """Retain the native event through an explicit admission deferral."""
         raise MatrixAttachmentFetchDeferredError("generated-canonical", ("network",))
 
     session = _durable_session(
@@ -283,7 +247,7 @@ async def test_attachment_fetch_checkpoint_failure_keeps_native_event_pending(
     )
 
     caplog.set_level("ERROR", logger="medre.adapters.matrix.session")
-    with pytest.raises(CallbackNotAcceptedError):
+    with pytest.raises(MatrixAttachmentFetchDeferredError):
         await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
 
     assert list(session._attachment_fetch_deferrals.values()) == [1]
@@ -321,29 +285,15 @@ async def test_attachment_fetch_deferral_map_is_bounded_with_oldest_eviction() -
     assert session._attachment_fetch_deferrals[f"{overflow:064x}"] == 2
 
 
-async def test_unexpected_admission_error_prunes_attachment_fetch_deferral(
+async def test_unexpected_admission_error_preserves_attachment_retry_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An event nio consumes on an unexpected error is pruned, not parked.
-
-    The deferral entry is recorded when acquisition defers, then removed
-    when the same event's next dispatch dies in a way nio will consume
-    (live errors are wrapped as accepted); the entry would otherwise
-    outlive its event until the size cap evicted it.
-    """
-
-    class CallbackNotAcceptedError(Exception):
-        pass
-
-    monkeypatch.setitem(
-        sys.modules,
-        "nio",
-        SimpleNamespace(CallbackNotAcceptedError=CallbackNotAcceptedError),
-    )
+    """A failed committed record retains its original acquisition retry state."""
 
     calls = {"count": 0}
 
     async def flaky_admission(_event: dict[str, object], _provenance: str) -> None:
+        """Defer attachment acquisition before surfacing an application failure."""
         calls["count"] += 1
         if calls["count"] == 1:
             raise MatrixAttachmentFetchDeferredError(
@@ -365,62 +315,13 @@ async def test_unexpected_admission_error_prunes_attachment_fetch_deferral(
         },
     )
 
-    with pytest.raises(CallbackNotAcceptedError):
+    with pytest.raises(MatrixAttachmentFetchDeferredError):
         await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
     assert list(session._attachment_fetch_deferrals.values()) == [1]
 
     with pytest.raises(RuntimeError, match="boom"):
         await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
-    assert session._attachment_fetch_deferrals == {}
-
-
-async def test_prune_failure_preserves_original_unexpected_admission_error(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    original = RuntimeError("boom")
-
-    async def reject(_event: dict[str, object], _provenance: str) -> None:
-        raise original
-
-    session = _durable_session(admission_callback=reject)
-    session._attachment_fetch_deferrals["a" * 64] = 1
-    # MatrixSession defines __slots__, so patches go through the class; the
-    # key helper is a staticmethod and must stay one to keep its arity.
-    monkeypatch.setattr(
-        MatrixSession,
-        "_attachment_fetch_deferral_key",
-        staticmethod(lambda _normalized: "a" * 64),
-    )
-    monkeypatch.setattr(
-        MatrixSession,
-        "_prune_attachment_fetch_deferral",
-        AsyncMock(side_effect=OSError("checkpoint unavailable")),
-    )
-    room = SimpleNamespace(room_id="!room:example.org")
-    event = SimpleNamespace(
-        sender="@alice:example.org",
-        event_id="$media",
-        body="photo.png",
-        source={
-            "event_id": "$media",
-            "sender": "@alice:example.org",
-            "type": "m.room.message",
-            "content": {"msgtype": "m.image", "body": "photo.png"},
-        },
-    )
-
-    caplog.set_level("WARNING", logger="medre.adapters.matrix.session")
-    with pytest.raises(RuntimeError, match="boom") as caught:
-        await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
-
-    assert caught.value is original
-    messages = [record.message for record in caplog.records]
-    assert any("MATRIX_ADMISSION_UNEXPECTED_ERROR" in message for message in messages)
-    assert any(
-        "Failed to prune Matrix attachment fetch deferral" in message
-        for message in messages
-    )
+    assert list(session._attachment_fetch_deferrals.values()) == [1]
 
 
 @pytest.mark.parametrize(
@@ -446,6 +347,7 @@ async def test_load_attachment_fetch_checkpoint_discards_malformed_metadata(
     )
 
     async def load(_stream: str) -> AdapterCheckpoint:
+        """Return only the checkpoint selected by this test."""
         return checkpoint
 
     logger = MagicMock()
@@ -466,23 +368,19 @@ async def test_unexpected_runtime_error_propagates_and_is_logged(
     """Programming/storage errors must NOT masquerade as deferral — nio
     sees the original ``RuntimeError`` and wraps it in
     ``_LiveCallbackError(accepted=True)`` (live) or logs+drops (recovered),
-    so the event is consumed rather than redispatched forever.
+    so supervision can stop admission while preserving the committed record.
 
     The session also logs ``MATRIX_ADMISSION_UNEXPECTED_ERROR`` so the
     operator can correlate the failure.
     """
 
-    class CallbackNotAcceptedError(Exception):
-        pass
-
     original = RuntimeError("sqlite write failed")
 
     async def reject(_event: dict[str, object], _provenance: str) -> None:
+        """Surface the original admission failure without SDK translation."""
         raise original
 
     session = _durable_session(admission_callback=reject)
-    fake_nio = SimpleNamespace(CallbackNotAcceptedError=CallbackNotAcceptedError)
-    monkeypatch.setitem(sys.modules, "nio", fake_nio)
     room = SimpleNamespace(room_id="!room:example.org")
     event = SimpleNamespace(
         sender="@alice:example.org",
@@ -501,14 +399,13 @@ async def test_unexpected_runtime_error_propagates_and_is_logged(
         await session._on_nio_admission(room, event, SimpleNamespace(value="recovered"))
 
     assert caught.value is original
-    assert not isinstance(caught.value, CallbackNotAcceptedError)
     assert any(
         "MATRIX_ADMISSION_UNEXPECTED_ERROR" in rec.message for rec in caplog.records
     ), [rec.message for rec in caplog.records]
     assert session._recovered_event_count == 1
 
 
-async def test_admission_failure_preserves_original_error_when_rejection_missing(
+async def test_admission_deferral_does_not_require_sdk_error_translation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When nio is not importable at all, deferral signals also propagate
@@ -517,6 +414,7 @@ async def test_admission_failure_preserves_original_error_when_rejection_missing
     from medre.core.ingress import DurableIngressDeferredError
 
     async def defer(_event: dict[str, object], _provenance: str) -> None:
+        """Retain the native event through an explicit admission deferral."""
         raise DurableIngressDeferredError("$event", ("deferred",))
 
     session = _durable_session(admission_callback=defer)
@@ -540,131 +438,6 @@ async def test_admission_failure_preserves_original_error_when_rejection_missing
         await session._on_nio_admission(room, event, SimpleNamespace(value="live"))
 
 
-async def test_sync_response_commits_checkpoint_before_nio_ack() -> None:
-    calls: list[tuple[str, str]] = []
-
-    async def commit(stream: str, cursor: str, _metadata: str) -> None:
-        calls.append(("commit", f"{stream}:{cursor}"))
-
-    session = _durable_session(checkpoint_committer=commit)
-    client = MagicMock()
-    client.acknowledge_classic_sync.side_effect = lambda cursor: calls.append(
-        ("ack", cursor)
-    )
-    session._client = client
-    response = SimpleNamespace(next_batch="s42", abandoned_rooms={})
-
-    await session._on_sync_response(response)
-
-    assert calls == [("commit", "classic_sync:s42"), ("ack", "s42")]
-    assert session._committed_sync_token == "s42"
-    assert session.diagnostics().committed_checkpoint_present is True
-
-
-async def test_ack_token_mismatch_defers_instead_of_killing_sync() -> None:
-    """Live finding F4 (run4): while MEDRE's awaited checkpoint commit runs,
-    nio recovery dispatches (undecryptable-event room-key work) can still be
-    active; `acknowledge_classic_sync` then raises LocalProtocolError. The
-    exception used to propagate out of the response callback and kill
-    sync_forever, forcing an outer-supervisor restart. The durable checkpoint is
-    already committed at that point — the acknowledgement must defer to a
-    later quiet response, not crash the sync loop."""
-    ack_calls: list[str] = []
-
-    def _ack(cursor: str) -> None:
-        ack_calls.append(cursor)
-        raise LocalProtocolError(
-            "Classic Sync acknowledgement token does not match the staged " "response."
-        )
-
-    session = _durable_session()
-    client = MagicMock()
-    client._recovery = _recovery_state(busy=True)
-    client.acknowledge_classic_sync.side_effect = _ack
-    session._client = client
-    response = SimpleNamespace(next_batch="s43", abandoned_rooms={})
-
-    await session._on_sync_response(response)  # must not raise
-
-    assert ack_calls == ["s43"]
-    assert session._committed_sync_token == "s43"
-    assert session.diagnostics().classic_ack_deferrals == 1
-
-
-async def test_deferred_classic_ack_recovers_on_next_response() -> None:
-    """After recovery work settles, the next response's acknowledgement
-    succeeds and the deferral counter stops growing."""
-    calls: list[str] = []
-    fail_first = True
-    session = _durable_session()
-    client = MagicMock()
-    client._recovery = _recovery_state(busy=True)
-
-    def _ack(cursor: str) -> None:
-        nonlocal fail_first
-        calls.append(cursor)
-        if not fail_first:
-            return
-        fail_first = False
-        # Recovery dispatches are still active: nio rejects the token.
-        raise LocalProtocolError(
-            "Classic Sync acknowledgement token does not match the " "staged response."
-        )
-
-    client.acknowledge_classic_sync.side_effect = _ack
-    session._client = client
-
-    await session._on_sync_response(
-        SimpleNamespace(next_batch="s43", abandoned_rooms={})
-    )
-
-    # Recovery work settles before the next response arrives, so the next
-    # acknowledgement succeeds and the deferral counter resets.
-    client._recovery = _recovery_state(busy=False)
-    await session._on_sync_response(
-        SimpleNamespace(next_batch="s44", abandoned_rooms={})
-    )
-
-    assert calls == ["s43", "s44"]
-    assert session._committed_sync_token == "s44"
-    assert session.diagnostics().classic_ack_deferrals == 0
-
-
-async def test_non_recovery_ack_mismatch_propagates() -> None:
-    session = _durable_session()
-    client = MagicMock()
-    client._recovery = _recovery_state(busy=False)
-    client.acknowledge_classic_sync.side_effect = LocalProtocolError(
-        "Classic Sync acknowledgement token does not match the staged response."
-    )
-    session._client = client
-
-    with pytest.raises(LocalProtocolError, match="staged response"):
-        await session._on_sync_response(
-            SimpleNamespace(next_batch="s43", abandoned_rooms={})
-        )
-
-    assert session._committed_sync_token is None
-    assert session.diagnostics().classic_ack_deferrals == 0
-
-
-async def test_checkpoint_failure_does_not_acknowledge_nio() -> None:
-    async def commit(_stream: str, _cursor: str, _metadata: str) -> None:
-        raise OSError("disk full")
-
-    session = _durable_session(checkpoint_committer=commit)
-    client = MagicMock()
-    session._client = client
-
-    with pytest.raises(OSError, match="disk full"):
-        await session._on_sync_response(
-            SimpleNamespace(next_batch="s43", abandoned_rooms={})
-        )
-
-    client.acknowledge_classic_sync.assert_not_called()
-    assert session._committed_sync_token is None
-
-
 async def test_stopping_session_does_not_commit_or_ack_sync_response() -> None:
     commits = AsyncMock()
     session = _durable_session(checkpoint_committer=commits)
@@ -680,9 +453,10 @@ async def test_stopping_session_does_not_commit_or_ack_sync_response() -> None:
     client.acknowledge_classic_sync.assert_not_called()
 
 
-async def test_load_checkpoint_restores_committed_cursor_and_clears_stale_recovery() -> (
+async def test_load_checkpoint_restores_cursor_without_discarding_sdk_recovery() -> (
     None
 ):
+    """Read legacy cursor evidence without erasing pending SDK recovery."""
     checkpoint = AdapterCheckpoint(
         adapter_id="matrix-test",
         stream="classic_sync",
@@ -692,7 +466,8 @@ async def test_load_checkpoint_restores_committed_cursor_and_clears_stale_recove
     )
 
     async def load(stream: str) -> AdapterCheckpoint | None:
-        if stream == "matrix_attachment_fetch_deferrals":
+        """Return only the checkpoint selected by this test."""
+        if stream in ("matrix_attachment_fetch_deferrals", "nio_durable"):
             return None
         assert stream == "classic_sync"
         return checkpoint
@@ -711,7 +486,7 @@ async def test_load_checkpoint_restores_committed_cursor_and_clears_stale_recove
         "causes": {"fetch_failed": 1},
         "room_count": 1,
     }
-    client.clear_persisted_sync_recovery.assert_called_once_with()
+    client.clear_persisted_sync_recovery.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -726,6 +501,7 @@ async def test_load_checkpoint_restores_committed_cursor_and_clears_stale_recove
 async def test_load_checkpoint_warns_and_discards_malformed_nested_metadata(
     metadata_json: str,
 ) -> None:
+    """Malformed legacy loss metadata cannot fabricate recovery facts."""
     checkpoint = AdapterCheckpoint(
         adapter_id="matrix-test",
         stream="classic_sync",
@@ -735,7 +511,8 @@ async def test_load_checkpoint_warns_and_discards_malformed_nested_metadata(
     )
 
     async def load(stream: str) -> AdapterCheckpoint | None:
-        if stream == "matrix_attachment_fetch_deferrals":
+        """Return only the checkpoint selected by this test."""
+        if stream != "classic_sync":
             return None
         return checkpoint
 
@@ -750,77 +527,3 @@ async def test_load_checkpoint_warns_and_discards_malformed_nested_metadata(
     logger.warning.assert_called_once_with(
         "Ignoring malformed Matrix checkpoint recovery metadata"
     )
-
-
-async def test_sync_failure_resets_uncommitted_state_before_retry() -> None:
-    session = _durable_session()
-    session._committed_sync_token = "committed"
-    session._config = make_matrix_config()
-    client = MagicMock()
-    client.has_uncommitted_classic_sync_state = True
-    client.reset_classic_sync_state = AsyncMock()
-    client.next_batch = "staged"
-    attempts = 0
-
-    async def sync_forever(**_kwargs: object) -> None:
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise ConnectionError("lost connection")
-        session._stop_requested = True
-
-    client.sync_forever = sync_forever
-    session._client = client
-
-    original_sleep = asyncio.sleep
-
-    async def no_delay(_delay: float) -> None:
-        await original_sleep(0)
-
-    from unittest.mock import patch
-
-    with patch("asyncio.sleep", side_effect=no_delay):
-        await session._sync_with_reconnect()
-
-    client.reset_classic_sync_state.assert_awaited_once_with()
-    assert client.next_batch == "committed"
-    assert attempts == 2
-
-
-async def test_recovery_abandonment_is_persisted_before_cursor_advances() -> None:
-    calls: list[str] = []
-    committed_metadata = ""
-
-    async def commit(_stream: str, _cursor: str, metadata: str) -> None:
-        nonlocal committed_metadata
-        committed_metadata = metadata
-        calls.append("commit")
-
-    session = _durable_session(checkpoint_committer=commit)
-    client = MagicMock()
-    client.acknowledge_classic_sync.side_effect = lambda _cursor: calls.append("ack")
-    client.acknowledge_unrecovered_rooms.side_effect = lambda _rooms: calls.append(
-        "settle"
-    )
-    session._client = client
-    response = SimpleNamespace(
-        next_batch="s-loss",
-        abandoned_rooms={"!lost:example.org": [SimpleNamespace(value="fetch_failed")]},
-    )
-
-    await session._on_sync_response(response)
-
-    assert calls == ["commit", "ack", "settle"]
-    assert '"!lost:example.org":["fetch_failed"]' in committed_metadata
-    diag = session.diagnostics()
-    assert diag.recovery_abandoned_room_count == 1
-    assert diag.recovery_last_abandonment == (
-        '{"causes":{"fetch_failed":1},"room_count":1}'
-    )
-    assert "!lost:example.org" not in diag.recovery_last_abandonment
-
-    await session._on_sync_response(
-        SimpleNamespace(next_batch="s-clean", abandoned_rooms={})
-    )
-    assert '"!lost:example.org":["fetch_failed"]' in committed_metadata
-    assert session.diagnostics().recovery_abandoned_room_count == 1
