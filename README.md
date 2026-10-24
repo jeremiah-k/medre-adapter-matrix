@@ -305,8 +305,43 @@ dependencies fail production startup instead of silently selecting ordinary sync
 
 Encryption readiness and own-device cross-signing are separate diagnostics.
 Installing dependencies or authenticating does not recover lost account signing
-keys. Runtime never resets that identity. Inspect
-`medre diagnostics --refresh-health` after restarting.
+keys. Runtime never resets that identity. To inspect the actual selected store:
+
+```bash
+medre adapter matrix auth status --adapter-id matrix --config ~/medre/bridge.yaml
+```
+
+If a signing file exists but cannot be read, check ownership/read permissions
+first. Preserve a private backup before manually moving a confirmed unusable
+file aside; import refuses replacement. Rerun status after the destination is
+absent. SDK/path inspection failures require diagnosis before assuming keys are
+missing.
+
+If the signing file is missing, stop the bridge and locate an existing SDK
+account-signing JSON for the same Matrix account (for example in an MMRelay
+store or a backup). Do not copy tokens or device databases between applications.
+Validate and import that backup using the existing MEDRE credentials:
+
+```bash
+medre adapter matrix auth restore-signing --adapter-id matrix \
+  --config ~/medre/bridge.yaml \
+  --from ~/.mmrelay/matrix/store/@bot:example.com_cross_signing.json
+```
+
+The command verifies the token's account/device and matches the backup's keys
+against the existing server identity before writing anything. Publication
+requires an absent destination and filesystem hard-link support; an existing
+file is never replaced. The source backup remains unchanged. A post-publication
+filesystem error can leave the complete file present: inspect status before
+retrying. Restart the bridge to sign its own device using the restored keys.
+A readable local file alone does not prove server/device verification. Import
+restores account-signing keys, not historical encrypted-room message keys.
+
+Ordinary login preserves account signing keys and cannot reconstruct missing
+private material. Only when no matching backup exists should an operator
+consider authenticated login with --reset-cross-signing; it replaces the account
+identity and requires verification again in other clients. Stop the running
+bridge before using `medre diagnostics --refresh-health`, which opens adapters.
 
 The opt-in `test_matrix_durable_runtime_live.py` proof takes explicit local
 homeserver accounts through environment variables. It runs the real MEDRE

@@ -1067,19 +1067,49 @@ class MatrixSession:
             self._logger.debug(
                 "Matrix own-device cross-signing verified (%s)", result or "verified"
             )
-        elif diagnostics.reset_required or diagnostics.repair_required:
+        elif diagnostics.last_failure_category == "bootstrap_required":
             login_mode = "--oauth " if self._oauth_manager is not None else ""
-            guidance = (
-                "Matrix own-device cross-signing needs authenticated recovery; "
-                "restore this adapter's E2EE state or run "
-                "medre adapter matrix auth login %s--adapter-id %s. "
-                "Replacing lost identity material additionally requires an explicit "
-                "--reset-cross-signing; ordinary login must preserve signing keys."
+            self._logger.info(
+                "Matrix account signing needs authenticated bootstrap. Stop the bridge, "
+                "then run medre adapter matrix auth login %s--adapter-id %s. "
+                "Preserve the existing E2EE store; an identity reset is unnecessary.",
+                login_mode,
+                self._config.adapter_id,
             )
-            if diagnostics.reset_required:
-                self._logger.warning(guidance, login_mode, self._config.adapter_id)
-            else:
-                self._logger.info(guidance, login_mode, self._config.adapter_id)
+        elif diagnostics.last_failure_category in {
+            "local_identity_missing",
+            "identity_mismatch",
+        }:
+            login_mode = "--oauth " if self._oauth_manager is not None else ""
+            self._logger.warning(
+                "Matrix own-device signing needs account-key recovery. Stop the bridge, "
+                "then run medre adapter matrix auth status --adapter-id %s --config PATH "
+                "using this bridge's config. Restore a matching account signing "
+                "backup with auth restore-signing; ordinary login cannot recreate "
+                "existing private signing keys. If there is no matching backup, "
+                "medre adapter matrix auth login %s--adapter-id %s --reset-cross-signing "
+                "is explicit recovery and requires re-verification.",
+                self._config.adapter_id,
+                login_mode,
+                self._config.adapter_id,
+            )
+        elif diagnostics.repair_required:
+            self._logger.warning(
+                "Matrix own-device signature repair is incomplete (%s). Account "
+                "signing keys are present; preserve the E2EE store. Check SDK "
+                "support, token permissions and homeserver connectivity, then retry. "
+                "Account-identity replacement is unnecessary for device repair.",
+                diagnostics.last_failure_category,
+            )
+        elif diagnostics.last_failure_category:
+            self._logger.warning(
+                "Matrix own-device signing could not be verified (%s). Preserve "
+                "the E2EE store and check SDK/connectivity or local file permissions. "
+                "Run medre adapter matrix auth status --adapter-id %s --config PATH "
+                "with this bridge's config before choosing recovery.",
+                diagnostics.last_failure_category,
+                self._config.adapter_id,
+            )
 
     async def _start_e2ee_optional(self) -> None:
         """E2EE-optional startup.
