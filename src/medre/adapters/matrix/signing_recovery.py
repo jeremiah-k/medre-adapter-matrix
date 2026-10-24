@@ -71,7 +71,7 @@ def inspect_signing_file(store_path: Path, user_id: str) -> SigningFileStatus:
     except (OSError, ValueError):
         return SigningFileStatus(None, "path_unavailable")
     try:
-        path.stat()
+        path.lstat()
     except FileNotFoundError:
         return SigningFileStatus(path, "missing")
     except OSError:

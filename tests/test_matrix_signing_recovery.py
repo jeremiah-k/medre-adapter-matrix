@@ -372,6 +372,12 @@ async def test_runtime_guidance_matches_failure_category(
     assert ("auth restore-signing" in caplog.text) is restore
     assert ("--reset-cross-signing" in caplog.text) is reset
     assert ("auth login" in caplog.text) is login
+    assert ("move it aside manually" in caplog.text) is (
+        category == "identity_mismatch"
+    )
+    assert ("until the file is reported missing" in caplog.text) is (
+        category == "identity_mismatch"
+    )
 
 
 @pytest.mark.matrix_sdk
@@ -407,3 +413,77 @@ async def test_whoami_transport_failure_is_sanitized(
     assert "PRIVATE_SENTINEL" not in str(failure.value)
     client.close.assert_awaited_once()
     assert not (tmp_path / "untouched").exists()
+
+
+def test_dangling_signing_symlink_is_not_reported_missing(tmp_path, monkeypatch):
+    """Path occupancy and restore both refuse dangling links; status must agree."""
+    import sys
+    from types import ModuleType
+
+    store = tmp_path / "store"
+    store.mkdir()
+    occupied = store / "signing.json"
+    occupied.symlink_to(store / "not-here")
+    # Stub the whole import chain so the case runs without the real SDK; the
+    # placeholder class is never invoked because the dangling read fails first.
+    nio = ModuleType("nio")
+    nio_crypto = ModuleType("nio.crypto")
+    crypto = ModuleType("nio.crypto.cross_signing")
+    crypto.cross_signing_sidecar_path = lambda *_args: str(occupied)
+    crypto.CrossSigningIdentity = object
+    monkeypatch.setitem(sys.modules, "nio", nio)
+    monkeypatch.setitem(sys.modules, "nio.crypto", nio_crypto)
+    monkeypatch.setitem(sys.modules, "nio.crypto.cross_signing", crypto)
+    assert (
+        inspect_signing_file(store, "@bot:example.com").state == "invalid_or_unreadable"
+    )
+
+
+def test_signing_status_failure_does_not_claim_an_import(monkeypatch, capsys):
+    """Read-only status exceptions must never suggest keys were published."""
+    from medre.adapters.matrix.cli_contrib import _signing_command
+    from medre.adapters.matrix import signing_cli
+
+    monkeypatch.setattr(signing_cli, "signing_config", lambda *_: None)
+
+    def failing_status(*_args):
+        raise RuntimeError("secret")
+
+    monkeypatch.setattr(signing_cli, "signing_status", failing_status)
+    # cli_contrib imports the functions by name within the dispatch routine.
+    with pytest.raises(SystemExit) as exc:
+        _signing_command(
+            SimpleNamespace(adapter_id="matrix", config=None), restore=False
+        )
+    assert exc.value.code == 1
+    out = capsys.readouterr().err
+    assert "Matrix signing status failed" in out
+    assert "No import was attempted" in out
+    assert "already published" not in out
+    assert "secret" not in out
+
+
+def test_readable_signing_status_explains_runtime_mismatch(
+    tmp_path, monkeypatch, capsys
+):
+    """A present local identity does not imply that its server chain matches."""
+    from medre.adapters.matrix.signing_cli import signing_status
+    from medre.adapters.matrix.signing_recovery import SigningFileStatus
+    from medre.config.adapters.matrix import MatrixConfig
+
+    monkeypatch.setattr(
+        "medre.adapters.matrix.signing_cli.inspect_signing_file",
+        lambda *_: SigningFileStatus(tmp_path / "signing.json", "present"),
+    )
+    signing_status(
+        MatrixConfig(
+            adapter_id="matrix",
+            homeserver="https://example.com",
+            user_id="@bot:example.com",
+            store_path=str(tmp_path),
+        )
+    )
+    output = capsys.readouterr().out
+    assert "identity_mismatch" in output
+    assert "move this conflicting file aside" in output
+    assert "refuses to overwrite" in output

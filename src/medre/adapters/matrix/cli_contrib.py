@@ -298,13 +298,23 @@ def _signing_command(args: Any, *, restore: bool) -> None:
         else:
             signing_status(config, getattr(args, "config", None))
     except MatrixConnectionError as exc:
-        print(f"Matrix signing recovery: {exc}", file=sys.stderr)
+        action = "recovery" if restore else "status"
+        print(f"Matrix signing {action}: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
     except Exception as exc:
         # SDK transports and cleanup can raise provider-specific exceptions.
         # Cancellation and terminal interrupts inherit BaseException and propagate.
-        print(
-            f"Matrix signing recovery failed ({type(exc).__name__}); check the selected config, SDK and connectivity. Existing keys were not replaced; inspect status in case a complete import was already published.",
-            file=sys.stderr,
-        )
+        if restore:
+            message = (
+                f"Matrix signing recovery failed ({type(exc).__name__}); check the "
+                "selected config, SDK and connectivity. Existing keys were not "
+                "replaced; inspect status in case a complete import was already "
+                "published."
+            )
+        else:
+            message = (
+                f"Matrix signing status failed ({type(exc).__name__}); check the "
+                "selected config and SDK. No import was attempted."
+            )
+        print(message, file=sys.stderr)
         raise SystemExit(1) from None

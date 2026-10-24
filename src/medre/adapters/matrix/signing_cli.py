@@ -51,7 +51,11 @@ def signing_status(config: MatrixConfig, config_path: str | None = None) -> None
     print(f"Local signing status: {status.state}")
     if status.state == "present":
         print(
-            "Local account keys are readable. Server/device verification occurs at runtime."
+            "Local account keys are readable. Server/device verification occurs "
+            "at runtime. "
+            "If runtime reported identity_mismatch, preserve a private backup and move "
+            "this conflicting file aside before attempting restore-signing; the "
+            "import refuses to overwrite existing files."
         )
         return
     print(

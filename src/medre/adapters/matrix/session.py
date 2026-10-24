@@ -1076,10 +1076,25 @@ class MatrixSession:
                 login_mode,
                 self._config.adapter_id,
             )
-        elif diagnostics.last_failure_category in {
-            "local_identity_missing",
-            "identity_mismatch",
-        }:
+        elif diagnostics.last_failure_category == "identity_mismatch":
+            login_mode = "--oauth " if self._oauth_manager is not None else ""
+            self._logger.warning(
+                "Matrix account signing keys conflict with the server identity. Stop "
+                "the bridge and run medre adapter matrix auth status --adapter-id %s "
+                "--config PATH using this bridge's config. Preserve a private backup "
+                "of the conflicting signing file and move it aside manually; restore "
+                "will not replace an existing path. Rerun auth status until the file "
+                "is reported missing, then import a server-matching backup with "
+                "auth restore-signing. Ordinary login cannot reconstruct existing "
+                "private signing keys. With no matching backup, "
+                "medre adapter matrix auth login %s--adapter-id %s "
+                "--reset-cross-signing is explicit last-resort recovery and requires "
+                "device re-verification.",
+                self._config.adapter_id,
+                login_mode,
+                self._config.adapter_id,
+            )
+        elif diagnostics.last_failure_category == "local_identity_missing":
             login_mode = "--oauth " if self._oauth_manager is not None else ""
             self._logger.warning(
                 "Matrix own-device signing needs account-key recovery. Stop the bridge, "
