@@ -15,3 +15,8 @@ remote relay claim under Matrix-native metadata; it MUST NOT replace the actual
 Matrix sender, source adapter, native reference, or canonical relations. Local
 storage evidence remains the authority for native relation binding and mutation
 permissions. A sender mention without a target ID MUST NOT become an exact reply.
+
+The builder and normalizer are provided by `medre.core.rendering.bridge_context`.
+The Matrix module retains its existing imports for callers. The v1 wire format
+matches core's bridge-context schema; this move MUST NOT change metadata modes
+or the receiver's native identity and relation authority.
