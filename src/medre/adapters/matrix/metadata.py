@@ -147,11 +147,12 @@ class MatrixMetadataEnvelope:
 
 
 def build_matrix_metadata_content(
-    event: CanonicalEvent, mode: str = "safe"
+    event: CanonicalEvent, mode: str = "safe", *, source_attribution: Any = None
 ) -> dict[str, object]:
     """Project canonical provenance into the selected Matrix wire envelope.
 
-    Safe mode includes only core's normalized metadata domains. Provider-native
+    Safe mode includes normalized metadata domains and bounded source/relation
+    context. Provider-native
     and custom metadata require explicit full mode; configuration and SDK
     objects are never inputs. The envelope is a relay hint, not authorization
     or proof of delivery. MMRelay fields have their own independent opt-in.
@@ -199,4 +200,9 @@ def build_matrix_metadata_content(
             for name in ("transport", "routing", "radio", "telemetry")
             if metadata.get(name) is not None
         }
+    from medre.adapters.matrix.bridge_context import build_bridge_context
+
+    context = build_bridge_context(event, source_attribution)
+    if context is not None:
+        metadata["bridge_context"] = context
     return {"medre": {"envelope": envelope, "metadata": metadata}}

@@ -215,7 +215,7 @@ def matrix_relay_metadata(content: dict[str, Any]) -> dict[str, object] | None:
     )
     if not all(isinstance(value, str) for value in string_fields):
         return None
-    return {
+    result: dict[str, object] = {
         "medre_envelope": {
             "schema_version": envelope.schema_version,
             "canonical_event_id": envelope.canonical_event_id,
@@ -228,6 +228,18 @@ def matrix_relay_metadata(content: dict[str, Any]) -> dict[str, object] | None:
             "native_source_summary": envelope.native_source_summary,
         }
     }
+    from medre.adapters.matrix.bridge_context import normalize_bridge_context
+
+    embedded = content.get("medre")
+    metadata = embedded.get("metadata") if isinstance(embedded, dict) else None
+    context = (
+        normalize_bridge_context(metadata.get("bridge_context"))
+        if isinstance(metadata, dict)
+        else None
+    )
+    if context is not None:
+        result["bridge_context"] = context
+    return result
 
 
 def build_matrix_native_metadata(
