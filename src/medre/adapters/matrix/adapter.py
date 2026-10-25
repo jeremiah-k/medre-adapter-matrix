@@ -262,6 +262,7 @@ class MatrixAdapter(AdapterContract):
         "_session",
         "_sync_failure_stored",
         "_last_health",
+        "_health_reasons",
         "_clock",
         "_codec",
         "_relation_handler",
@@ -306,6 +307,7 @@ class MatrixAdapter(AdapterContract):
         self._session: MatrixSession | None = None
         self._sync_failure_stored: Exception | None = None
         self._last_health: str | None = None
+        self._health_reasons: tuple[str, ...] = ()
         self._clock: Callable[[], float] = time.monotonic
         self._codec = MatrixCodec(config.adapter_id, config)
         self._relation_handler = MatrixRelationHandler()
@@ -367,6 +369,7 @@ class MatrixAdapter(AdapterContract):
         # Clear cached health at lifecycle boundary so diagnostics
         # never reports a stale health string from a previous session.
         self._last_health = None
+        self._health_reasons = ()
 
         # Reset delivery / rate-limit stats on start
         self._transient_delivery_failures = 0
@@ -472,6 +475,7 @@ class MatrixAdapter(AdapterContract):
 
         # Clear cached health at lifecycle boundary.
         self._last_health = None
+        self._health_reasons = ()
 
         if self.ctx is not None:
             self.ctx.logger.info("MatrixAdapter %s stopped", self.adapter_id)
@@ -514,13 +518,17 @@ class MatrixAdapter(AdapterContract):
             self._sync_failure = self._session.last_sync_error
         sync_failure = self._sync_failure
 
+        reasons: list[str] = []
         if sync_failure is not None:
+            reasons.append("sync_failed")
             health = "failed"
         elif self._session is None or not self._session.connected:
+            reasons.append("not_connected")
             health = "unknown"
         elif self._session.is_logged_in():
             health = "healthy"
         else:
+            reasons.append("not_authenticated")
             health = "failed"
 
         # Sync readiness/watchdog: authentication alone is not enough to
@@ -533,24 +541,39 @@ class MatrixAdapter(AdapterContract):
         if health == "healthy" and self._session is not None:
             last_sync = self._session.last_successful_sync
             if self._session.reconnecting or last_sync is None:
+                if self._session.reconnecting:
+                    reasons.append("reconnecting")
+                if last_sync is None:
+                    reasons.append("waiting_initial_sync_ack")
                 health = "degraded"
             else:
                 stale_timeout = float(self._config.sync_stale_timeout_seconds)
                 if stale_timeout > 0:
                     now = self._clock()
                     if (now - last_sync) > stale_timeout:
+                        reasons.append("sync_stale")
                         health = "degraded"
 
         if (
-            health == "healthy"
+            health in {"healthy", "degraded"}
             and self._session is not None
             and self._config.encryption_mode != "plaintext"
             and not self._session.crypto_enabled
         ):
             # Optional startup preserves unencrypted-room operation, but it
             # cannot satisfy the configured encryption feature without crypto.
+            reasons.append("crypto_inactive")
             health = "degraded"
 
+        health_reasons = tuple(reasons)
+        if health != self._last_health or health_reasons != self._health_reasons:
+            logging.getLogger(__name__).info(
+                "Matrix adapter %s health=%s reasons=%s",
+                self.adapter_id,
+                health,
+                ",".join(health_reasons) or "none",
+            )
+        self._health_reasons = health_reasons
         self._last_health = health
         return AdapterInfo(
             adapter_id=self.adapter_id,
@@ -1596,6 +1619,7 @@ class MatrixAdapter(AdapterContract):
             return {
                 "connected": diag.connected,
                 "health": self._last_health,
+                "health_reasons": self._health_reasons,
                 "mode": "live",
                 "logged_in": diag.logged_in,
                 "sync_task_running": diag.sync_task_running,
@@ -1696,6 +1720,7 @@ class MatrixAdapter(AdapterContract):
         return {
             "connected": False,
             "health": self._last_health,
+            "health_reasons": self._health_reasons,
             "mode": "live",
             "logged_in": False,
             "sync_task_running": False,

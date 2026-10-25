@@ -841,9 +841,15 @@ class MatrixSession:
 
     def _on_batch_acknowledged(self, batch: Any) -> None:
         """Expose progress only after the SDK commits its acknowledgement."""
+        first_ack = self._last_successful_sync is None
         self._last_successful_sync = self._clock()
         self._reconnect_attempts = 0
         self._last_reconnect_error = None
+        if first_ack:
+            self._logger.info(
+                "Matrix durable sync acknowledged its first batch (completes_sync=%s)",
+                batch.completes_sync,
+            )
         if batch.completes_sync:
             self._initial_sync_done = True
             self._live_sync_started = True
