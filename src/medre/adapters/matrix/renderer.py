@@ -1349,7 +1349,13 @@ class MatrixRenderer:
         """Apply the destination instance's metadata policy on every send path."""
         config = self._configs.get(ctx.target_adapter)
         mode = getattr(config, "metadata_embedding_mode", "safe")
-        content.update(build_matrix_metadata_content(event, mode))
+        content.update(
+            build_matrix_metadata_content(
+                event,
+                mode,
+                source_attribution=self._build_source_attribution(event, ctx),
+            )
+        )
 
     def _finalize_send_content(
         self,

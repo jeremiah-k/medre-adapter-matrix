@@ -20,3 +20,13 @@ When encryption initialization is inactive, later undecryptable event observatio
 MUST NOT replace the startup dependency or repair diagnosis. Undecryptable-event
 counters remain available, and event-specific diagnostics MAY replace the last
 error only while crypto is operational or no startup diagnosis exists.
+
+## Health diagnosis
+
+Adapter health MUST expose reason codes for pending initial sync acknowledgement,
+reconnection, stale sync, inactive crypto, authentication and transport failures.
+Authentication alone MUST NOT establish inbound readiness. A pending resumed
+long poll MAY leave startup degraded until its durable batch is acknowledged;
+that wait MUST be distinguishable from a crypto failure. The first acknowledged
+durable batch MUST be observable in runtime logging. Startup summaries remain
+snapshots of startup, rather than claims about subsequent health.

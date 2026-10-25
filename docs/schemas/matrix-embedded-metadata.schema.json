@@ -3,7 +3,9 @@
   "$id": "https://medre.dev/schemas/matrix-embedded-metadata.schema.json",
   "title": "MEDRE Matrix embedded provenance",
   "type": "object",
-  "required": ["envelope"],
+  "required": [
+    "envelope"
+  ],
   "additionalProperties": false,
   "properties": {
     "envelope": {
@@ -47,16 +49,29 @@
           "const": 1
         },
         "metadata_mode": {
-          "enum": ["minimal", "safe", "full"]
+          "enum": [
+            "minimal",
+            "safe",
+            "full"
+          ]
         },
         "trace_id": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "root_event_id": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "conversation_id": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "source_native_ref": {
           "oneOf": [
@@ -80,10 +95,16 @@
                   "type": "string"
                 },
                 "native_channel_id": {
-                  "type": ["string", "null"]
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "native_thread_id": {
-                  "type": ["string", "null"]
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               }
             }
@@ -92,7 +113,12 @@
       }
     },
     "metadata": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "bridge_context": {
+          "$ref": "#/$defs/BridgeContext"
+        }
+      }
     }
   },
   "allOf": [
@@ -124,7 +150,11 @@
                 "type": "string"
               },
               "metadata_mode": {
-                "enum": ["minimal", "safe", "full"]
+                "enum": [
+                  "minimal",
+                  "safe",
+                  "full"
+                ]
               }
             }
           }
@@ -160,11 +190,199 @@
               },
               "telemetry": {
                 "type": "object"
+              },
+              "bridge_context": {
+                "$ref": "#/$defs/BridgeContext"
               }
             }
           }
         }
       }
     }
-  ]
+  ],
+  "$defs": {
+    "BridgeContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source",
+        "relations"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "source": {
+          "$ref": "#/$defs/BridgeSource"
+        },
+        "relations": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/BridgeRelation"
+          }
+        }
+      }
+    },
+    "BridgeSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "canonical_event_id",
+        "channel",
+        "sender_id",
+        "native_ref"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "canonical_event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "channel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "sender_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "sender_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "sender_short_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "sender_verification": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "origin_label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "native_ref": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/BridgeNativeRef"
+            }
+          ]
+        }
+      }
+    },
+    "BridgeRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "relation_type",
+        "target_event_id",
+        "target_native_ref",
+        "key"
+      ],
+      "properties": {
+        "relation_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "target_event_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "target_native_ref": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/BridgeNativeRef"
+            }
+          ]
+        }
+      }
+    },
+    "BridgeNativeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "native_channel_id",
+        "native_message_id",
+        "native_thread_id"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "native_channel_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        },
+        "native_message_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "native_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        }
+      }
+    }
+  }
 }
