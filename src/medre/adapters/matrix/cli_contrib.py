@@ -34,9 +34,28 @@ def register_matrix_cli(parser: argparse.ArgumentParser) -> None:
         required=True,
     )
 
-    adapter_matrix_auth_sub.add_parser(
+    status_p = adapter_matrix_auth_sub.add_parser(
         "status",
-        help="Show Matrix credential file status without printing secrets",
+        help="Show credentials and optional per-adapter signing-file status",
+        allow_abbrev=False,
+    )
+    status_p.add_argument(
+        "--adapter-id", help="Inspect this adapter's E2EE signing file"
+    )
+    status_p.add_argument(
+        "--config", help="Resolve the adapter from this runtime config"
+    )
+    restore_p = adapter_matrix_auth_sub.add_parser(
+        "restore-signing",
+        allow_abbrev=False,
+        help="Validate and import existing account-signing keys; stop the bridge first",
+    )
+    restore_p.add_argument("--adapter-id", required=True)
+    restore_p.add_argument(
+        "--config", help="Use this runtime config's account and store"
+    )
+    restore_p.add_argument(
+        "--from", dest="signing_backup", required=True, metavar="BACKUP"
     )
 
     auth_login_p = adapter_matrix_auth_sub.add_parser(
@@ -210,7 +229,15 @@ def dispatch_matrix_cli(args: Any) -> bool:
         if auth_command == "status":
             from medre.adapters.matrix.cli import _adapter_matrix_auth_status
 
-            asyncio.run(_adapter_matrix_auth_status())
+            if getattr(args, "config", None) and not getattr(args, "adapter_id", None):
+                raise SystemExit("--config requires --adapter-id for signing status")
+            if getattr(args, "adapter_id", None):
+                _signing_command(args, restore=False)
+            else:
+                asyncio.run(_adapter_matrix_auth_status())
+            return True
+        if auth_command == "restore-signing":
+            _signing_command(args, restore=True)
             return True
         if auth_command == "logout":
             import sys
@@ -244,3 +271,50 @@ def dispatch_matrix_cli(args: Any) -> bool:
         return True
 
     return False
+
+
+def _signing_command(args: Any, *, restore: bool) -> None:
+    """Dispatch explicit recovery with secret-conscious error reporting."""
+    import sys
+    from pathlib import Path
+
+    from medre.adapters.matrix.errors import MatrixConnectionError
+    from medre.adapters.matrix.signing_cli import (
+        restore_signing,
+        signing_config,
+        signing_status,
+    )
+
+    try:
+        config = signing_config(args.adapter_id, getattr(args, "config", None))
+        if restore:
+            target = asyncio.run(
+                restore_signing(config, Path(args.signing_backup).expanduser())
+            )
+            print(f"Account signing keys restored: {target}")
+            print(
+                "Restart the bridge to verify/sign its device using these existing account keys."
+            )
+        else:
+            signing_status(config, getattr(args, "config", None))
+    except MatrixConnectionError as exc:
+        action = "recovery" if restore else "status"
+        print(f"Matrix signing {action}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    except Exception as exc:
+        # SDK transports and cleanup can raise provider-specific exceptions.
+        # Cancellation and terminal interrupts inherit BaseException and propagate.
+        if restore:
+            message = (
+                f"Matrix signing recovery failed ({type(exc).__name__}); check the "
+                "selected config, SDK and connectivity. Existing keys were not "
+                "replaced; inspect status in case a complete import was already "
+                "published."
+            )
+        else:
+            message = (
+                f"Matrix signing status failed ({type(exc).__name__}); check the "
+                "selected config and SDK. No import was attempted."
+            )
+        print(message, file=sys.stderr)
+        raise SystemExit(1) from None

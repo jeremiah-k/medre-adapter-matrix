@@ -196,9 +196,11 @@ class MatrixCrossSigningService:
                 self._logger.warning(
                     "Matrix has an existing cross-signing identity for %s but the "
                     "local identity sidecar is unavailable; preserving the server "
-                    "identity. Restore the Matrix E2EE state or use the explicit "
-                    "authenticated reset command.",
+                    "identity. Expected signing file: %s. Restore a matching account "
+                    "signing backup; ordinary login cannot recreate these keys.",
                     self._client_label("user_id"),
+                    self._provider_sidecar_path()
+                    or "inspect auth status --adapter-id ADAPTER_ID --config PATH",
                 )
                 return None
             if not allow_bootstrap:
@@ -263,6 +265,40 @@ class MatrixCrossSigningService:
             )
             return None
         return cast(_EnsureCrossSigning, ensure_method), identity
+
+    async def verify_backup_identity(self, identity: object) -> None:
+        """Validate existing account keys using a read-only server query.
+
+        Missing current-device signatures are acceptable during import; runtime
+        repairs them only after the persisted account identity matches. No
+        signing keys or device keys are uploaded by this method.
+        """
+        from medre.adapters.matrix.errors import MatrixConnectionError
+
+        if getattr(identity, "user_id", None) != self._required_client_string(
+            "user_id"
+        ):
+            raise MatrixConnectionError(
+                "Signing backup belongs to another Matrix account."
+            )
+        try:
+            async with asyncio.timeout(self._timeout):
+                payload = await self._query_own_keys()
+                if not self._server_has_identity(payload):
+                    raise MatrixConnectionError(
+                        "The server has no existing account signing identity to match this backup."
+                    )
+                check = self._check_server_chain(payload, identity)
+                if check.status not in {"valid", "repairable"}:
+                    raise MatrixConnectionError(
+                        "Signing backup does not match the server's verified account identity; no keys were imported or reset."
+                    )
+        except (asyncio.CancelledError, MatrixConnectionError):
+            raise
+        except Exception as exc:
+            raise MatrixConnectionError(
+                f"Cannot verify signing backup against the homeserver ({type(exc).__name__}); no keys were imported or reset."
+            ) from None
 
     async def _query_own_keys(self) -> dict[str, object]:
         user_id = getattr(self._client, "user_id", None)

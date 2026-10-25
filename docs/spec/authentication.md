@@ -87,3 +87,30 @@ cross-signing. Credentials alone MUST NOT be represented as verified runtime
 device signing. Selecting an adapter MUST target its configured E2EE store.
 Runtime diagnostics MUST identify the adapter-scoped recovery command. Missing
 private signing material MUST NOT trigger implicit account-identity replacement.
+
+
+## Explicit signing-backup restoration
+
+`auth status --adapter-id ID --config PATH` MUST inspect the selected runtime
+store and use the SDK-owned signing filename. It MUST distinguish readable
+local keys from server/device verification and MUST NOT expose private keys.
+Inspection MUST NOT open a device database or contact the homeserver. Existing
+unreadable or invalid files MUST receive preservation/permissions guidance rather
+than an import command that requires their absence. SDK/path inspection errors
+MUST NOT be presented as proof of missing keys. Runtime guidance MUST distinguish
+bootstrap, device-signature repair, account-key recovery and provider failures;
+device repair MUST NOT recommend account-identity reset.
+
+`auth restore-signing` MUST validate an operator-selected SDK signing backup
+and verify the existing token's account/device before querying account keys.
+The backup's master/self-signing keys and master signature MUST match the
+existing server identity before local publication. Missing current-device
+signatures MAY be repaired by runtime after import; import MUST NOT upload keys,
+create a device, replace credentials, or reset the server identity.
+
+Import MUST publish a complete private file into an absent destination without
+a check-then-replace fallback. Existing destinations, including racing imports,
+MUST remain untouched. Unsupported publication filesystems MUST fail closed.
+Directory-sync failures after publication MUST report that the complete file
+may already exist. Operators MUST stop the bridge before restoring signing
+state. Restoration of account-signing keys does not restore room message keys.
