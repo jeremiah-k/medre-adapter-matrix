@@ -487,3 +487,44 @@ def test_readable_signing_status_explains_runtime_mismatch(
     assert "identity_mismatch" in output
     assert "move this conflicting file aside" in output
     assert "refuses to overwrite" in output
+
+
+@pytest.mark.matrix_sdk
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_cleanup_failure_preserves_original_verification_failure(
+    real_backup, tmp_path, monkeypatch, cancelled
+):
+    """A second close failure cannot replace verification errors or cancellation."""
+    from medre.adapters.matrix.signing_cli import restore_signing
+    from medre.config.adapters.matrix import MatrixConfig
+
+    identity, source = real_backup
+    failure = (
+        asyncio.CancelledError() if cancelled else RuntimeError("PRIVATE_SENTINEL")
+    )
+    client = SimpleNamespace(
+        restore_login=lambda *_: None,
+        whoami=AsyncMock(side_effect=failure),
+        close=AsyncMock(side_effect=OSError("PRIVATE_CLOSE_SENTINEL")),
+    )
+    monkeypatch.setattr("nio.AsyncClient", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(
+        "medre.adapters.matrix.oauth_session.manager_for_credentials",
+        lambda *_args, **_kwargs: None,
+    )
+    with pytest.raises(
+        asyncio.CancelledError if cancelled else MatrixConnectionError
+    ) as error:
+        await restore_signing(
+            MatrixConfig(
+                adapter_id="matrix",
+                homeserver="https://example.com",
+                user_id=identity.user_id,
+                access_token="test-token",
+                store_path=str(tmp_path / "untouched"),
+            ),
+            source,
+        )
+    assert "PRIVATE_SENTINEL" not in str(error.value)
+    assert "PRIVATE_CLOSE_SENTINEL" not in str(error.value)
+    client.close.assert_awaited_once()

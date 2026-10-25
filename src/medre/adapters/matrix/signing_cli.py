@@ -146,4 +146,16 @@ async def restore_signing(config: MatrixConfig, source: Path) -> Path:
                 MatrixCrossSigningService(client),
             )
     finally:
-        await close_matrix_client(client)
+        import logging
+        import sys
+
+        original_error = sys.exception()
+        try:
+            await close_matrix_client(client)
+        except Exception as exc:
+            if original_error is None:
+                raise
+            logging.getLogger(__name__).warning(
+                "Matrix signing recovery client cleanup failed (%s); preserving the original failure",
+                type(exc).__name__,
+            )
