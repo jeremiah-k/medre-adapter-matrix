@@ -1,18 +1,9 @@
 """Matrix adapter health lifecycle parity and stale-sync degraded tests.
 
-Tests the following lifecycle rules:
-
-1. ``diagnostics()["health"]`` is ``None`` before the first ``health_check()``
-   call in each lifecycle (fresh, post-start, post-stop, post-restart).
-2. After ``health_check()`` the value is a valid health string.
-3. ``stop()`` clears the cached health back to ``None``.
-4. ``start()`` clears the cached health back to ``None``.
-5. ``health_check()`` reports ``"degraded"`` when last successful sync
-   is older than ``config.sync_stale_timeout_seconds`` (but ``None``,
-   meaning no sync completed yet, does **not** trigger degraded).
-6. ``health_check()`` reports ``"healthy"`` when last successful sync
-   is recent, or when it is ``None`` (first sync not yet completed).
-7. The clock used for stale detection is fakeable via ``adapter._clock``.
+Tests that fresh and stopped diagnostics remain unset, while completed startup
+publishes readiness and sync progress replaces it without an explicit probe.
+Authentication without acknowledged sync remains degraded. Staleness uses the
+fakeable adapter clock, and stop clears cached health for the retired lifetime.
 
 No network access, no nio dependency.  All tests use mock sessions.
 
@@ -174,16 +165,16 @@ async def test_diagnostics_health_none_after_stop():
     assert diag["health"] is None
 
 
-async def test_diagnostics_health_none_after_start(mock_nio):
-    """start() clears _last_health so diagnostics shows None even if set before."""
+async def test_diagnostics_health_published_after_start(mock_nio):
+    """Startup replaces stale failure with the authenticated session readiness."""
     config = _make_config()
     adapter = MatrixAdapter(config)
     adapter._last_health = "failed"
     await adapter.start(_make_context())
     try:
-        assert adapter._last_health is None
+        assert adapter._last_health == "degraded"
         diag = adapter.diagnostics()
-        assert diag["health"] is None
+        assert diag["health"] == "degraded"
     finally:
         await adapter.stop()
 
@@ -221,7 +212,7 @@ async def test_restart_clears_health(mock_nio):
         mock_nio.AsyncClient.return_value = client
 
         await adapter.start(_make_context())
-        assert adapter._last_health is None
+        assert adapter._last_health == "degraded"
     finally:
         await adapter.stop()
 

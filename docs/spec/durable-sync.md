@@ -69,3 +69,22 @@ observations MUST be filtered before canonical admission, while their SDK batch
 continues to acknowledgement. The e2e extra remains a compatibility alias.
 The released SDK's POSIX file-lease requirement prevents production durable
 sessions on Windows; importable crypto alone does not qualify Windows storage.
+
+## Native health observations
+
+The adapter MUST report completed native health changes through the runtime's
+optional `AdapterContext.report_health` sink when available. Explicit probes and
+native notifications MUST use the same readiness calculation. Reports MUST be
+bound to the started adapter lifetime; stop and replacement MUST retire their
+callbacks. Observer exceptions MUST NOT interrupt native lifecycle or delivery.
+Contexts without the optional sink MUST retain explicit-probe compatibility.
+
+Acknowledged durable batches and successful ordinary sync responses MUST clear
+transient sync degradation. Starting a reconnect request MUST NOT establish
+health before accepted progress. Stale-progress recycling, reconnect failure and
+terminal sync failure MUST update retained health without a manual probe. Crypto
+and authentication restrictions MUST remain part of readiness.
+
+Cancellation of the sync owner without an adapter shutdown request MUST report
+failed health. Shutdown-owned cancellation MUST NOT create native failure
+observations. Neither path changes delivery evidence or authorizes a new owner.

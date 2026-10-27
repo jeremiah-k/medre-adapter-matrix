@@ -124,8 +124,8 @@ class TestSyncRecovery:
                 assert session._sync_failure is None
                 # Reconnect attempts accumulated during failures
                 assert session.reconnect_attempts == fail_count
-                # Not currently in reconnect phase (sync is running)
-                assert session.reconnecting is False
+                # A running request without acknowledged progress has not proven recovery.
+                assert session.reconnecting is True
             finally:
                 await session.stop()
 
@@ -218,11 +218,15 @@ class TestSyncRecovery:
             finally:
                 await session.stop()
 
-    async def test_cancelled_error_stops_reconnect(self, mock_nio) -> None:
-        """CancelledError during sync stops reconnect loop."""
+    @pytest.mark.parametrize("shutdown_requested", [False, True])
+    async def test_cancelled_error_stops_reconnect(
+        self, mock_nio, shutdown_requested
+    ) -> None:
+        """Only shutdown-owned cancellation can stop sync without failure evidence."""
 
         async def _cancel_sync(*a: object, **kw: object) -> None:
             await asyncio.sleep(0)
+            session._stop_requested = shutdown_requested
             raise asyncio.CancelledError()
 
         mock_nio.AsyncClient.return_value.sync = _cancel_sync
@@ -233,8 +237,10 @@ class TestSyncRecovery:
             await session.start()
             for _ in range(10):
                 await asyncio.sleep(0)
-            # CancelledError should not set sync_failure
-            assert session._sync_failure is None
+            if shutdown_requested:
+                assert session._sync_failure is None
+            else:
+                assert isinstance(session._sync_failure, RuntimeError)
         finally:
             await session.stop()
 

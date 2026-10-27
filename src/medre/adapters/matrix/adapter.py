@@ -263,6 +263,8 @@ class MatrixAdapter(AdapterContract):
         "_sync_failure_stored",
         "_last_health",
         "_health_reasons",
+        "_health_epoch",
+        "_reported_health",
         "_clock",
         "_codec",
         "_relation_handler",
@@ -308,6 +310,8 @@ class MatrixAdapter(AdapterContract):
         self._sync_failure_stored: Exception | None = None
         self._last_health: str | None = None
         self._health_reasons: tuple[str, ...] = ()
+        self._health_epoch = 0
+        self._reported_health: tuple[str, tuple[str, ...]] | None = None
         self._clock: Callable[[], float] = time.monotonic
         self._codec = MatrixCodec(config.adapter_id, config)
         self._relation_handler = MatrixRelationHandler()
@@ -364,6 +368,9 @@ class MatrixAdapter(AdapterContract):
             If ``mindroom-nio`` is not installed, the client fails
             to connect, or E2EE preconditions are unmet.
         """
+        self._health_epoch += 1
+        self._reported_health = None
+        health_epoch = self._health_epoch
         self._sync_failure = None  # Reset from any previous failure
 
         # Clear cached health at lifecycle boundary so diagnostics
@@ -422,6 +429,7 @@ class MatrixAdapter(AdapterContract):
             checkpoint_committer=ctx.commit_checkpoint,
             logger=session_logger,
             auto_join_rooms=self._config.auto_join_rooms,
+            on_health_change=lambda: self._report_native_health(health_epoch),
         )
         self._starting = True
         try:
@@ -440,6 +448,7 @@ class MatrixAdapter(AdapterContract):
                 )
             self._started = True
             self._mark_started(ctx)
+            self._report_native_health(health_epoch)
             ctx.logger.info("MatrixAdapter %s started", self.adapter_id)
         except BaseException as exc:
             self._starting = False
@@ -463,6 +472,8 @@ class MatrixAdapter(AdapterContract):
 
         Idempotent: safe to call multiple times or before start().
         """
+        self._health_epoch += 1
+        self._reported_health = None
         self._starting = False
         self._started = False
         self._start_time = None
@@ -511,6 +522,29 @@ class MatrixAdapter(AdapterContract):
         ``details`` dict to
         :func:`~medre.core.supervision.health.normalize_adapter_health`.
         """
+        return self._health_info()
+
+    def _report_native_health(self, epoch: int) -> None:
+        """Publish completed native readiness changes for this started lifetime only."""
+        if epoch != self._health_epoch or not self._started or self.ctx is None:
+            return
+        info = self._health_info()
+        report = getattr(self.ctx, "report_health", None)
+        state = info.health, self._health_reasons
+        if report is None or self._reported_health == state:
+            return
+        if info.health not in {"healthy", "degraded", "failed"}:
+            return
+        try:
+            report(info)
+            self._reported_health = state
+        except Exception as exc:
+            self.ctx.logger.warning(
+                "Matrix health notification failed (%s)", type(exc).__name__
+            )
+
+    def _health_info(self) -> AdapterInfo:
+        """Use one readiness calculation for explicit probes and native transitions."""
         # Check for sync failure — from adapter-level captured failure,
         # from live session, or from _sync_failure attribute.
         # Propagate session failure to adapter attribute for test access.
