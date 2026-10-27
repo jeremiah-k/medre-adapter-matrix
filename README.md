@@ -149,6 +149,11 @@ A fresh store obtains its initial state from the homeserver; existing stores kee
 their device identity and pending batches. See the
 [durable sync contract](docs/spec/durable-sync.md) for adoption and rollback limits.
 
+Stopped-state maintenance derives this adapter's capture inventory from a
+provider-owned declaration shipped in this distribution; the durable store and
+token sidecar are declared honestly rather than guessed. See the
+[stopped-state declaration contract](docs/spec/stopped-state.md).
+
 Matrix event `content.medre` carries versioned canonical provenance and selected
 metadata. `metadata_embedding_mode` is destination-specific: `off` omits the
 MEDRE namespace, `minimal` carries event/actor identity, `safe` adds native

@@ -23,6 +23,9 @@ def adapter_spec() -> AdapterSpec:
     return AdapterSpec(
         **native_setup,
         sample_config=SymbolRef("medre.adapters.matrix.sample", "sample_config"),
+        stopped_state_declaration=SymbolRef(
+            "medre.adapters.matrix.stopped_declaration", "declaration"
+        ),
         destinations=(
             DestinationSpec(
                 "matrix_room",
