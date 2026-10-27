@@ -310,6 +310,10 @@ class MatrixSession:
     logger:
         Optional :class:`logging.Logger`.  When ``None`` a module-level
         fallback logger is used.
+    on_health_change:
+        Optional synchronous diagnostic observer of completed native sync state.
+        It never owns acknowledgements, recovery scheduling or message delivery.
+        Observer exceptions are contained by the session.
     """
 
     __slots__ = (
@@ -320,6 +324,7 @@ class MatrixSession:
         "_sync_task",
         "_sync_failure",
         "_message_callback",
+        "_health_callback",
         "_typing_callback",
         "_admission_callback",
         "_checkpoint_loader",
@@ -391,6 +396,7 @@ class MatrixSession:
         logger: logging.Logger | None = None,
         auto_join_rooms: tuple[str, ...] = (),
         clock: Callable[[], float] = time.monotonic,
+        on_health_change: Callable[[], None] | None = None,
     ) -> None:
         """Retain instance-scoped callbacks and lifecycle state without opening a client."""
         self._config = config
@@ -399,6 +405,7 @@ class MatrixSession:
         self._sync_task: asyncio.Task[None] | None = None
         self._sync_failure: Exception | None = None
         self._message_callback = message_callback
+        self._health_callback = on_health_change
         self._typing_callback = typing_callback
         self._durable_owner: Any = None
         self._batch_consumer: MatrixBatchConsumer | None = None
@@ -839,10 +846,22 @@ class MatrixSession:
         )
         await committer("nio_durable", f"{batch.stream_id}:{batch.sequence}", metadata)
 
+    def _notify_health_change(self) -> None:
+        """Signal owned native progress without letting diagnostics interrupt sync."""
+        if self._stop_requested or self._closed or self._health_callback is None:
+            return
+        try:
+            self._health_callback()
+        except Exception as exc:
+            self._logger.warning(
+                "Matrix session health notification failed (%s)", type(exc).__name__
+            )
+
     def _on_batch_acknowledged(self, batch: Any) -> None:
         """Expose progress only after the SDK commits its acknowledgement."""
         first_ack = self._last_successful_sync is None
         self._last_successful_sync = self._clock()
+        self._reconnecting = False
         self._reconnect_attempts = 0
         self._last_reconnect_error = None
         if first_ack:
@@ -853,6 +872,7 @@ class MatrixSession:
         if batch.completes_sync:
             self._initial_sync_done = True
             self._live_sync_started = True
+        self._notify_health_change()
 
     def _build_client_config(self, nio_module: Any, *, encryption_enabled: bool) -> Any:
         """Build the pinned mindroom-nio sync and peer-device trust policy.
@@ -1608,12 +1628,14 @@ class MatrixSession:
         self._initial_sync_done = True
         self._live_sync_started = True
         self._last_successful_sync = self._clock()
+        self._reconnecting = False
         if self._reconnect_attempts:
             self._logger.info(
                 "Sync recovered after %d reconnect attempts", self._reconnect_attempts
             )
         self._reconnect_attempts = 0
         self._last_reconnect_error = None
+        self._notify_health_change()
 
     async def _load_classic_checkpoint(self) -> None:
         """Restore MEDRE's committed Classic cursor and recovery evidence."""
@@ -2334,6 +2356,8 @@ class MatrixSession:
 
                 now = self._clock()
                 self._last_stale_sync_at = now
+                self._reconnecting = True
+                self._notify_health_change()
                 self._logger.warning(
                     "Matrix sync made no durable progress for %.1fs; recycling "
                     "the current sync loop",
@@ -2395,19 +2419,24 @@ class MatrixSession:
         """
         while not self._stop_requested:
             try:
-                self._reconnecting = False
                 await self._run_sync_forever_attempt()
                 if self._stop_requested:
                     return
                 raise RuntimeError("Matrix sync_forever exited unexpectedly")
             except asyncio.CancelledError:
                 self._reconnecting = False
+                if not self._stop_requested:
+                    self._sync_failure = RuntimeError(
+                        "Matrix sync cancelled without shutdown"
+                    )
+                    self._notify_health_change()
                 raise
             except _SyncRecycleFailed as exc:
                 self._logger.error("Matrix stale-sync recycle failed: %s", exc)
                 self._sync_failure = exc
                 self._last_reconnect_error = str(exc)
                 self._reconnecting = False
+                self._notify_health_change()
                 return
             except Exception as exc:
                 if self._stop_requested:
@@ -2426,8 +2455,11 @@ class MatrixSession:
                     self._sync_failure = exc
                     self._last_reconnect_error = str(exc)
                     self._reconnecting = False
+                    self._notify_health_change()
                     return
 
+                self._reconnecting = True
+                self._notify_health_change()
                 owner_active = False
                 if self._durable_sync_enabled and self._durable_owner is not None:
                     try:
@@ -2456,11 +2488,18 @@ class MatrixSession:
                             start_sync=False, known_device_id=device_id
                         )
                     except asyncio.CancelledError:
+                        self._reconnecting = False
+                        if not self._stop_requested:
+                            self._sync_failure = RuntimeError(
+                                "Matrix sync cancelled without shutdown"
+                            )
+                            self._notify_health_change()
                         raise
                     except Exception as reopen_error:
                         self._sync_failure = reopen_error
                         self._last_reconnect_error = str(reopen_error)
                         self._reconnecting = False
+                        self._notify_health_change()
                         self._logger.error(
                             "Matrix durable generation could not reopen", exc_info=True
                         )
@@ -2494,6 +2533,11 @@ class MatrixSession:
                     await asyncio.sleep(delay)
                 except asyncio.CancelledError:
                     self._reconnecting = False
+                    if not self._stop_requested:
+                        self._sync_failure = RuntimeError(
+                            "Matrix sync cancelled without shutdown"
+                        )
+                        self._notify_health_change()
                     raise
 
         self._reconnecting = False

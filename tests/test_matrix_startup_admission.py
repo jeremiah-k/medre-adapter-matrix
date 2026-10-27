@@ -51,7 +51,14 @@ async def test_startup_sync_durably_admits_before_start_returns(
             return False
 
         closed = False
+        connected = True
         last_sync_error = None
+        last_successful_sync = None
+        reconnecting = False
+        crypto_enabled = True
+
+        def is_logged_in(self) -> bool:
+            return True
 
         def __init__(self, **kwargs):
             self.callback = kwargs["admission_callback"]
@@ -60,6 +67,7 @@ async def test_startup_sync_durably_admits_before_start_returns(
             await self.callback(dict(EVENT), provenance)
 
         async def stop(self, **kwargs):
+            self.connected = False
             self.closed = True
 
     monkeypatch.setattr(adapter_module, "HAS_NIO", True)
@@ -73,6 +81,8 @@ async def test_startup_sync_durably_admits_before_start_returns(
         assert actual_provenance == provenance
         assert published == []
         assert adapter._started and not adapter._starting
+        # A connected fake session has not yet acknowledged a native sync.
+        assert (await adapter.health_check()).health == "degraded"
     finally:
         await adapter.stop()
 
@@ -97,7 +107,14 @@ async def test_legacy_startup_callback_remains_suppressed(monkeypatch):
             return False
 
         closed = False
+        connected = True
         last_sync_error = None
+        last_successful_sync = None
+        reconnecting = False
+        crypto_enabled = True
+
+        def is_logged_in(self) -> bool:
+            return True
 
         def __init__(self, **kwargs):
             self.callback = kwargs["message_callback"]
@@ -106,6 +123,7 @@ async def test_legacy_startup_callback_remains_suppressed(monkeypatch):
             await self.callback(dict(EVENT))
 
         async def stop(self, **kwargs):
+            self.connected = False
             self.closed = True
 
     monkeypatch.setattr(adapter_module, "HAS_NIO", True)
