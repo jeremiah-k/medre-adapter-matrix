@@ -9,7 +9,7 @@ license = "MIT"
 dependencies = ["medre>=0.1.0,<0.2.0", 'mindroom-nio[e2e]==1.1.5']
 
 [project.optional-dependencies]
-test = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "pytest-timeout==2.4.0", "jsonschema==4.26.0", "packaging==26.3"]
+test = ["pytest==9.1.1", "pytest-asyncio==1.4.1", "pytest-timeout==2.4.0", "jsonschema==4.26.0", "packaging==26.3"]
 e2e = ["mindroom-nio[e2e]==1.1.5"]
 
 [project.entry-points."medre.adapters"]
