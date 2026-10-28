@@ -1,29 +1,43 @@
 # Stopped-state declaration
 
-The adapter ships a provider-owned stopped-state declaration referenced from
-its `AdapterSpec` through the optional `stopped_state_declaration` symbol. The
-declaration MUST NOT import the transport SDK, MUST NOT open a profile, start
-or stop a process, or touch the network, and MUST resolve every path from
-configured values alone — the same prepared configuration the runtime derives
-through the adapter's preparation hook.
+The adapter's provider-owned declaration MUST preview configured paths without
+importing the transport SDK, opening a native profile, or touching the network.
+Capture MUST resolve native state only after retaining local exclusion through
+snapshot publication. Core consumes this contract through
+`medre.maintenance.stopped_declare`.
 
-The durable store database name is derived by the SDK from the configured user
-ID and device ID. When that name contains characters the inventory path grammar
-rejects, generic capture MUST be declared as externally managed with a
-provider-export requirement rather than a guessed filename; a representable
-name is declared as a required SQLite file under the configured store
-directory. A configured instance without a device ID MUST report unsupported,
-because the SDK names its store databases only at runtime.
+## Selected account state
 
-The access-token sidecar under the XDG configuration home MUST be declared
-export-only by this declaration. Its XDG location can be inside or outside
-the selected root; the declaration does not select it automatically.
+A configured user ID and device ID MUST identify the exact pinned SDK database
+`<user_id>_<device_id>.db`. Missing identities MUST be refused rather than
+inferred. Account and device values MUST NOT contain path separators. Present
+ordinary-store trust sidecars (`trusted_devices`, `blacklisted_devices`,
+`ignored_devices`) and the MEDRE credential sidecar MUST be selected alongside
+the database. Native SQLite sidecars MUST be validated, while committed WAL
+content MUST be captured by SQLite backup rather than raw sidecar copying.
 
-The SDK retains a store ownership lease. The maintenance declaration does not
-acquire that lease, so it MUST report local exclusion as unsupported. This is
-not evidence that no SDK lease exists, that a local profile is unused, or that
-another host with the same account and device is inactive.
+The common capture root MUST include every selected file, including the XDG
+credential sidecar when it exists. For a store under the XDG state home and
+credentials under the XDG configuration home, the common home directory can
+serve as the root; selection remains explicit and MUST NOT crawl that root.
+Absent credentials do not manufacture a file: credentials supplied in runtime
+configuration MUST be retained separately with that configuration. The token
+sidecar is sensitive and may include other account credentials.
 
-Consumers, selection enforcement, and the trust boundary live in
-`medre.maintenance.stopped_declare` on the core side; planning refuses a
-distribution whose declaration is missing or fails to load.
+SDK filenames containing colons require a POSIX capture and restore host.
+Windows alternate-stream spellings MUST NOT be accepted. Provider state MUST
+NOT be renamed merely to fit a portable inventory grammar.
+
+## Ownership and activation
+
+Capture MUST retain the existing SDK `<database>.ingest.lock` using the same
+exclusive flock protocol as the native store. It MUST NOT create, replace,
+steal or restore that lock file. A live ordinary or durable SDK owner MUST block
+capture. Selected identity, credential, trust and SQLite sidecar files and the
+lease file MUST reject symlink and hard-link aliases.
+
+A restored SDK owner creates its own lock at the restored location. Before
+activation, the operator MUST stop the original native owner and configure the
+restored store and XDG locations. Local exclusion MUST NOT be described as
+excluding another host with the same Matrix account and device. Capture and
+restore do not log in, rotate keys, reset native cursors, or authorize retries.
