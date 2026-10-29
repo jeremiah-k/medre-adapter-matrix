@@ -67,6 +67,9 @@ class MatrixConfig:
         test harnesses that need explicit control.
     sync_timeout_ms:
         Timeout in milliseconds for long-polling sync requests.
+    initial_sync_timeout_seconds:
+        Maximum startup wait for the first acknowledged sync, after room joins.
+        ``0`` disables the wait; expiry retains degraded health and live recovery.
     sync_stale_timeout_seconds:
         Maximum seconds without durable Classic Sync progress before the
         current sync loop is recycled. ``0`` disables active stale-sync
@@ -98,6 +101,7 @@ class MatrixConfig:
     metadata_embedding_mode: MetadataEmbeddingMode = "safe"
     store_path: str | None = None
     sync_timeout_ms: int = 30000
+    initial_sync_timeout_seconds: float = 45.0
     sync_stale_timeout_seconds: float = 300.0
     megolm_key_request_rate_limit_per_minute: int = 30
     megolm_key_request_max_inflight: int = 4
@@ -258,6 +262,16 @@ class MatrixConfig:
             or self.sync_timeout_ms < 0
         ):
             raise MatrixConfigError("sync_timeout_ms must be an int >= 0")
+
+        if (
+            isinstance(self.initial_sync_timeout_seconds, bool)
+            or not isinstance(self.initial_sync_timeout_seconds, (int, float))
+            or not math.isfinite(self.initial_sync_timeout_seconds)
+            or self.initial_sync_timeout_seconds < 0
+        ):
+            raise MatrixConfigError(
+                "initial_sync_timeout_seconds must be finite and >= 0"
+            )
 
         if isinstance(self.sync_stale_timeout_seconds, bool) or not isinstance(
             self.sync_stale_timeout_seconds, (int, float)

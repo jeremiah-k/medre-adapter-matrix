@@ -41,6 +41,7 @@ def _make_config(**overrides: Any) -> MatrixConfig:
         "homeserver": "https://matrix.example.com",
         "user_id": "@bot:example.com",
         "access_token": "tok_health",
+        "initial_sync_timeout_seconds": 0,
     }
     defaults.update(overrides)
     return MatrixConfig(**defaults)

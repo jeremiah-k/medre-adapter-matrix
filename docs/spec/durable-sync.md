@@ -2,7 +2,7 @@
 
 ## Ownership
 
-The Matrix provider requires Python 3.12+ and mindroom-nio[e2e] 1.1.5. The SDK
+The Matrix provider requires Python 3.12+ and mindroom-nio[e2e] 1.2.1. The SDK
 MUST own captured responses, crypto mutations, membership projections, gap
 recovery and its upstream cursor. MEDRE MUST own semantic ingress admission and
 its downstream event, routing and delivery records. Native readiness MUST NOT
@@ -70,6 +70,35 @@ continues to acknowledgement. The e2e extra remains a compatibility alias.
 The released SDK's POSIX file-lease requirement prevents production durable
 sessions on Windows; importable crypto alone does not qualify Windows storage.
 
+## Startup readiness
+
+After authentication and configured room joins, the adapter MUST allow up to
+`initial_sync_timeout_seconds` (default 45 seconds) for the first acknowledged
+sync before returning from startup. The value MUST be a finite nonnegative
+number; zero disables the wait. An acknowledgement accepted during room joins
+MUST satisfy the same condition without another wait. Pending startup MUST NOT
+publish an initial degraded notification solely because no batch has arrived.
+Authentication alone MUST NOT establish healthy readiness.
+
+The wait MUST end immediately on acknowledged progress, a native sync failure,
+or an observed reconnect. Its single deadline MUST NOT extend on notifications
+that do not establish progress. Expiry MUST leave the sync owner running and
+return its actual health, including `waiting_initial_sync_ack` when pending.
+Post-start progress MUST retain ordinary native health notifications.
+
+The runtime's per-adapter startup deadline bounds the entire start operation,
+including authentication, room joins and this wait. Cancellation MUST retire
+partial session resources and MUST NOT publish completed readiness. Startup
+admission MUST remain available while the adapter waits so an accepted batch
+can finish and acknowledge; the wait MUST NOT invent a checkpoint or bypass
+admission to establish readiness.
+
+Stopping or replacing an adapter MUST retire a pending startup wait immediately.
+A retired attempt MUST NOT publish readiness, mark itself started, clear a
+replacement's state, or close a replacement's session. Its callbacks MUST NOT
+wake another lifetime's waiter. Epoch checks MUST apply after native startup
+and room joins as well as after the initial-sync wait.
+
 ## Native health observations
 
 The adapter MUST report completed native health changes through the runtime's
@@ -84,6 +113,11 @@ transient sync degradation. Starting a reconnect request MUST NOT establish
 health before accepted progress. Stale-progress recycling, reconnect failure and
 terminal sync failure MUST update retained health without a manual probe. Crypto
 and authentication restrictions MUST remain part of readiness.
+Undecryptable-event diagnostics MUST NOT log raw Megolm session IDs. Missing,
+empty, non-text, or non-UTF-8 session identifiers MUST be treated as unknown
+rather than throwing from the sync callback. Unknown identifiers MUST NOT
+schedule a missing-room-key request. These diagnostic fallbacks MUST NOT authorize
+retry, change a stored checkpoint, or invent delivery evidence.
 
 Cancellation of the sync owner without an adapter shutdown request MUST report
 failed health. Shutdown-owned cancellation MUST NOT create native failure

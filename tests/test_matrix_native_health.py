@@ -41,6 +41,7 @@ def native_adapter(monkeypatch):
             user_id="@bot:example.com",
             access_token="test-token",
             encryption_mode="plaintext",
+            initial_sync_timeout_seconds=0,
         )
     )
 

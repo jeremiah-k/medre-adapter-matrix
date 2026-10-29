@@ -72,7 +72,7 @@ async def test_startup_sync_durably_admits_before_start_returns(
 
     monkeypatch.setattr(adapter_module, "HAS_NIO", True)
     monkeypatch.setattr(adapter_module, "MatrixSession", StartupSession)
-    adapter = MatrixAdapter(make_matrix_config())
+    adapter = MatrixAdapter(make_matrix_config(initial_sync_timeout_seconds=0))
     try:
         await adapter.start(ctx)
         admit.assert_awaited_once()
@@ -90,7 +90,7 @@ async def test_startup_sync_durably_admits_before_start_returns(
 @pytest.mark.parametrize("stopped", [False, True])
 async def test_inactive_durable_callback_defers_instead_of_acknowledging(stopped):
     _, ctx = make_adapter_context()
-    adapter = MatrixAdapter(make_matrix_config())
+    adapter = MatrixAdapter(make_matrix_config(initial_sync_timeout_seconds=0))
     if stopped:
         adapter.ctx = ctx
         await adapter.stop()
@@ -128,7 +128,7 @@ async def test_legacy_startup_callback_remains_suppressed(monkeypatch):
 
     monkeypatch.setattr(adapter_module, "HAS_NIO", True)
     monkeypatch.setattr(adapter_module, "MatrixSession", StartupSession)
-    adapter = MatrixAdapter(make_matrix_config())
+    adapter = MatrixAdapter(make_matrix_config(initial_sync_timeout_seconds=0))
     try:
         await adapter.start(ctx)
         assert published == []
