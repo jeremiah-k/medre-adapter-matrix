@@ -2,7 +2,7 @@
 
 ## Ownership
 
-The Matrix provider requires Python 3.12+ and mindroom-nio[e2e] 1.1.5. The SDK
+The Matrix provider requires Python 3.12+ and mindroom-nio[e2e] 1.2.1. The SDK
 MUST own captured responses, crypto mutations, membership projections, gap
 recovery and its upstream cursor. MEDRE MUST own semantic ingress admission and
 its downstream event, routing and delivery records. Native readiness MUST NOT
@@ -113,6 +113,11 @@ transient sync degradation. Starting a reconnect request MUST NOT establish
 health before accepted progress. Stale-progress recycling, reconnect failure and
 terminal sync failure MUST update retained health without a manual probe. Crypto
 and authentication restrictions MUST remain part of readiness.
+Undecryptable-event diagnostics MUST NOT log raw Megolm session IDs. Missing,
+empty, non-text, or non-UTF-8 session identifiers MUST be treated as unknown
+rather than throwing from the sync callback. Unknown identifiers MUST NOT
+schedule a missing-room-key request. These diagnostic fallbacks MUST NOT authorize
+retry, change a stored checkpoint, or invent delivery evidence.
 
 Cancellation of the sync owner without an adapter shutdown request MUST report
 failed health. Shutdown-owned cancellation MUST NOT create native failure

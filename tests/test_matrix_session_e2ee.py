@@ -356,6 +356,9 @@ class TestE2EEDiagnostics:
                 await adapter.start(make_matrix_context())
                 event = MagicMock(name="megolm_event")
                 event.event_id = "$undec"
+                # Real SDK events carry text; a generic MagicMock otherwise
+                # invents a non-string session_id on attribute access.
+                event.session_id = "opaque-megolm-session"
                 room = MagicMock(name="room")
                 room.room_id = "!room:example.com"
                 await adapter._session._on_megolm_event(room, event)  # type: ignore[union-attr]
@@ -368,6 +371,47 @@ class TestE2EEDiagnostics:
                 await adapter.stop()
         finally:
             compat.HAS_E2EE = original
+
+
+@pytest.mark.parametrize("invalid_session_id", [None, b"binary", 123, "", "\ud800"])
+async def test_megolm_diagnostics_rejects_non_text_session_ids(
+    mock_nio, invalid_session_id, monkeypatch
+) -> None:
+    """Partial native events do not crash or expose opaque SDK objects."""
+    import medre.adapters.matrix.compat as compat
+
+    original = compat.HAS_E2EE
+    try:
+        compat.HAS_E2EE = True
+        adapter = MatrixAdapter(
+            make_matrix_config(
+                encryption_mode="e2ee_required",
+                store_path="/tmp/store",
+                device_id="DEV",
+            )
+        )
+        try:
+            await adapter.start(make_matrix_context())
+            event = MagicMock(name="megolm_event")
+            event.event_id = "$undec-invalid"
+            event.session_id = invalid_session_id
+            room = MagicMock(name="room")
+            room.room_id = "!room:example.com"
+            assert adapter._session is not None
+            session = adapter._session
+            # Exercise the live dedup/hash path, not the startup backlog exit.
+            session._live_sync_started = True
+            recovery = AsyncMock()
+            monkeypatch.setattr(MatrixSession, "_request_missing_room_key", recovery)
+            await session._on_megolm_event(room, event)
+            assert adapter.diagnostics()["undecryptable_event_count"] == 1
+            assert "!room:example.com:?" in session._undecryptable_dedup
+            assert session._room_key_request_tasks == {}
+            recovery.assert_not_called()
+        finally:
+            await adapter.stop()
+    finally:
+        compat.HAS_E2EE = original
 
 
 # ===================================================================

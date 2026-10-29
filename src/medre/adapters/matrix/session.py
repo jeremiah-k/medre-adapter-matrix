@@ -2000,12 +2000,22 @@ class MatrixSession:
             return
 
         # Live undecryptable dedup (60-second window per room:session_id).
-        session_id = getattr(event, "session_id", "?")
+        session_id = getattr(event, "session_id", None)
+        # Malformed/partial SDK event objects must not crash the sync callback
+        # or leak raw session identifiers through diagnostic representations.
+        session_bytes = None
+        if isinstance(session_id, str) and session_id and session_id != "?":
+            try:
+                session_bytes = session_id.encode("utf-8")
+            except UnicodeEncodeError:
+                pass
+        if session_bytes is None:
+            session_id = "?"
         key = f"{room_id}:{session_id}"
         # Hashed session_id for logging — never log raw Megolm session IDs.
         session_id_tag = (
-            hashlib.sha256(session_id.encode()).hexdigest()[:8]
-            if session_id != "?"
+            hashlib.sha256(session_bytes).hexdigest()[:8]
+            if session_bytes is not None
             else "unknown"
         )
         now = time.monotonic()
@@ -2028,6 +2038,11 @@ class MatrixSession:
                 room_id,
             )
             self._undecryptable_dedup[key] = now
+
+        if session_id == "?":
+            # Diagnostics retain the malformed event, but no native key lookup
+            # can be scoped safely without a usable Megolm session identifier.
+            return
 
         # nio awaits async event callbacks while processing a sync response.
         # Missing-key recovery may spend tens of seconds in bounded network
