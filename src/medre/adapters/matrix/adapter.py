@@ -264,6 +264,7 @@ class MatrixAdapter(AdapterContract):
         "_last_health",
         "_health_reasons",
         "_health_epoch",
+        "_startup_health_changed",
         "_reported_health",
         "_clock",
         "_codec",
@@ -311,6 +312,7 @@ class MatrixAdapter(AdapterContract):
         self._last_health: str | None = None
         self._health_reasons: tuple[str, ...] = ()
         self._health_epoch = 0
+        self._startup_health_changed = asyncio.Event()
         self._reported_health: tuple[str, tuple[str, ...]] | None = None
         self._clock: Callable[[], float] = time.monotonic
         self._codec = MatrixCodec(config.adapter_id, config)
@@ -355,7 +357,10 @@ class MatrixAdapter(AdapterContract):
     async def start(self, ctx: AdapterContext) -> None:
         """Connect to the Matrix homeserver and begin syncing.
 
-        Delegates client lifecycle to :class:`MatrixSession`.
+        Delegates client lifecycle to :class:`MatrixSession`. Normal first-sync
+        latency remains inside startup for ``initial_sync_timeout_seconds``;
+        native failures and cancellation retain their ordinary health/cleanup
+        semantics.
 
         Parameters
         ----------
@@ -369,7 +374,9 @@ class MatrixAdapter(AdapterContract):
             to connect, or E2EE preconditions are unmet.
         """
         self._health_epoch += 1
+        self._startup_health_changed.set()
         self._reported_health = None
+        self._startup_health_changed = asyncio.Event()
         health_epoch = self._health_epoch
         self._sync_failure = None  # Reset from any previous failure
 
@@ -416,7 +423,7 @@ class MatrixAdapter(AdapterContract):
             await self._session.stop()
 
         session_logger = ctx.logger.getChild("session")
-        self._session = MatrixSession(
+        session = MatrixSession(
             config=self._config,
             message_callback=self._on_room_message,
             typing_callback=(
@@ -431,12 +438,17 @@ class MatrixAdapter(AdapterContract):
             auto_join_rooms=self._config.auto_join_rooms,
             on_health_change=lambda: self._report_native_health(health_epoch),
         )
+        if health_epoch != self._health_epoch:
+            raise asyncio.CancelledError("Matrix startup was stopped or superseded")
+        self._session = session
+        self._started = False
         self._starting = True
         try:
-            await self._session.start()
+            await session.start()
+            self._check_startup_lifetime(session, health_epoch)
             if self._config.auto_join_rooms:
                 ctx.logger.debug("Matrix session connected; joining configured rooms")
-                join_results = await self._session.ensure_joined_rooms(
+                join_results = await session.ensure_joined_rooms(
                     self._config.auto_join_rooms
                 )
                 joined_count = sum(1 for value in join_results.values() if value)
@@ -446,26 +458,91 @@ class MatrixAdapter(AdapterContract):
                     joined_count,
                     len(join_results) - joined_count,
                 )
+            self._check_startup_lifetime(session, health_epoch)
+            await self._wait_initial_sync(health_epoch)
+            self._check_startup_lifetime(session, health_epoch)
             self._started = True
             self._mark_started(ctx)
             self._report_native_health(health_epoch)
             ctx.logger.info("MatrixAdapter %s started", self.adapter_id)
         except BaseException as exc:
-            self._starting = False
-            if isinstance(exc, Exception):
-                self._sync_failure_stored = exc
-            try:
-                await asyncio.shield(self._session.stop())
-            except Exception:
-                pass
-            finally:
-                self._session = None
-                self._started = False
-                self._start_time = None
-                self.ctx = None
+            # A stop or replacement owns retirement after changing the epoch.
+            # A stale start must neither close nor clear another lifetime.
+            if health_epoch == self._health_epoch and self._session is session:
+                self._starting = False
+                if isinstance(exc, Exception):
+                    self._sync_failure_stored = exc
+                try:
+                    await asyncio.shield(session.stop())
+                except Exception:
+                    pass
+                finally:
+                    if health_epoch == self._health_epoch and self._session is session:
+                        self._session = None
+                        self._started = False
+                        self._start_time = None
+                        self.ctx = None
             raise
         finally:
-            self._starting = False
+            if health_epoch == self._health_epoch:
+                self._starting = False
+
+    def _check_startup_lifetime(self, session: MatrixSession, epoch: int) -> None:
+        """Refuse readiness after stop or replacement retires a pending start."""
+        if (
+            epoch != self._health_epoch
+            or self._session is not session
+            or not self._starting
+        ):
+            raise asyncio.CancelledError("Matrix startup was stopped or superseded")
+
+    async def _wait_initial_sync(self, epoch: int) -> None:
+        """Keep normal first-sync latency inside the owned startup attempt.
+
+        Native health callbacks wake the waiter on acknowledged progress or an
+        actual sync failure. Expiry leaves the existing sync owner running and
+        lets the normal health calculation describe its unsettled readiness.
+        No checkpoint, delivery evidence, or successful health is fabricated.
+        """
+        session = self._session
+        changed = self._startup_health_changed
+        budget = float(self._config.initial_sync_timeout_seconds)
+        if session is None or self.ctx is None or budget <= 0:
+            return
+
+        def pending() -> bool:
+            """Wait only for first progress while the native session can supply it."""
+            return (
+                session.connected
+                and session.is_logged_in()
+                and session.last_successful_sync is None
+                and session.last_sync_error is None
+                and not session.reconnecting
+                and (
+                    self._config.encryption_mode == "plaintext"
+                    or session.crypto_enabled
+                )
+            )
+
+        if not pending():
+            return
+        self.ctx.logger.info(
+            "Waiting up to %gs for the first Matrix sync acknowledgement", budget
+        )
+        try:
+            async with asyncio.timeout(budget):
+                while pending():
+                    self._check_startup_lifetime(session, epoch)
+                    changed.clear()
+                    await changed.wait()
+                self._check_startup_lifetime(session, epoch)
+        except TimeoutError:
+            self._check_startup_lifetime(session, epoch)
+            self.ctx.logger.warning(
+                "Matrix initial sync acknowledgement exceeded %gs; "
+                "continuing with native health and recovery active",
+                budget,
+            )
 
     async def stop(self, timeout: float = 5.0) -> None:
         """Stop syncing and disconnect from the homeserver.
@@ -473,23 +550,27 @@ class MatrixAdapter(AdapterContract):
         Idempotent: safe to call multiple times or before start().
         """
         self._health_epoch += 1
+        epoch = self._health_epoch
+        self._startup_health_changed.set()
         self._reported_health = None
         self._starting = False
         self._started = False
         self._start_time = None
+        session, ctx = self._session, self.ctx
 
-        if self._session is not None:
-            # Capture failure before stopping for health_check.
-            self._sync_failure_stored = self._session.last_sync_error
-            await self._session.stop(timeout=timeout)
-            self._session = None
+        if session is not None:
+            # Retain this lifetime's failure and close only its native owner.
+            self._sync_failure_stored = session.last_sync_error
+            await session.stop(timeout=timeout)
+            if epoch == self._health_epoch and self._session is session:
+                self._session = None
 
-        # Clear cached health at lifecycle boundary.
-        self._last_health = None
-        self._health_reasons = ()
+        if epoch == self._health_epoch:
+            self._last_health = None
+            self._health_reasons = ()
 
-        if self.ctx is not None:
-            self.ctx.logger.info("MatrixAdapter %s stopped", self.adapter_id)
+        if ctx is not None:
+            ctx.logger.info("MatrixAdapter %s stopped", self.adapter_id)
 
     def _should_ignore_unverified_devices(self) -> bool:
         """Determine whether to pass ``ignore_unverified_devices=True`` to nio.
@@ -526,7 +607,11 @@ class MatrixAdapter(AdapterContract):
 
     def _report_native_health(self, epoch: int) -> None:
         """Publish completed native readiness changes for this started lifetime only."""
-        if epoch != self._health_epoch or not self._started or self.ctx is None:
+        if epoch != self._health_epoch:
+            return
+        if self._starting:
+            self._startup_health_changed.set()
+        if not self._started or self.ctx is None:
             return
         info = self._health_info()
         report = getattr(self.ctx, "report_health", None)

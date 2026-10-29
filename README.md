@@ -30,6 +30,22 @@ for a locked uv deployment project, private Git, local checkouts, index sources,
 and the same-environment requirement. Neither MEDRE nor the provider installs
 packages during runtime startup.
 
+## Startup readiness
+
+After authentication and configured room joins, startup waits up to
+`initial_sync_timeout_seconds` (45 seconds by default) for the first acknowledged
+sync. A pending long poll is logged as startup progress. Login alone never
+establishes healthy readiness. On expiry, startup returns with degraded health
+and the existing sync owner keeps recovering; a later acknowledgement publishes
+healthy current state automatically. Native sync failure or reconnect exits
+the wait immediately with its actual health.
+
+Set the wait to `0` to report pending health immediately. The runtime's
+`adapter_start_timeout_seconds` bounds the complete adapter start, including
+login, joins, and this wait. Allow additional runtime budget for slow services;
+its cancellation still closes the partially started session. See
+[durable sync](docs/spec/durable-sync.md#startup-readiness) for the contract.
+
 ## Message presentation
 
 Supported Matrix HTML maps to bounded canonical text spans when its visible text
