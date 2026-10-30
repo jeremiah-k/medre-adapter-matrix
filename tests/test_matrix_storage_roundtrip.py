@@ -168,7 +168,11 @@ class TestMatrixCodecEventStorageRoundtrip:
         canonical = codec.decode(native, room_id="!test_room:example.com")
 
         await temp_storage.append(canonical)
-        retrieved = await temp_storage.get(canonical.event_id)
+        content_read = await temp_storage.read_event_for_replay(
+            canonical.event_id, now=datetime.now(timezone.utc)
+        )
+        assert content_read.status == "retained"
+        retrieved = content_read.event
 
         assert retrieved is not None, "Event not found in storage"
         assert retrieved.event_id == canonical.event_id
@@ -194,7 +198,11 @@ class TestMatrixCodecEventStorageRoundtrip:
         canonical = codec.decode(native, room_id="!meta_room:example.com")
 
         await temp_storage.append(canonical)
-        retrieved = await temp_storage.get(canonical.event_id)
+        content_read = await temp_storage.read_event_for_replay(
+            canonical.event_id, now=datetime.now(timezone.utc)
+        )
+        assert content_read.status == "retained"
+        retrieved = content_read.event
 
         assert retrieved is not None
         ndata = retrieved.metadata.native.data["matrix"]
@@ -219,7 +227,11 @@ class TestMatrixCodecEventStorageRoundtrip:
         assert canonical.source_native_ref.native_channel_id == "!ref_room:example.com"
 
         await temp_storage.append(canonical)
-        retrieved = await temp_storage.get(canonical.event_id)
+        content_read = await temp_storage.read_event_for_replay(
+            canonical.event_id, now=datetime.now(timezone.utc)
+        )
+        assert content_read.status == "retained"
+        retrieved = content_read.event
 
         assert retrieved is not None
         assert retrieved.source_native_ref is not None
@@ -330,7 +342,11 @@ class TestMatrixNativeRefStorage:
         )
 
         await temp_storage.append(reply_event)
-        retrieved = await temp_storage.get("ce-reply-1")
+        content_read = await temp_storage.read_event_for_replay(
+            "ce-reply-1", now=datetime.now(timezone.utc)
+        )
+        assert content_read.status == "retained"
+        retrieved = content_read.event
 
         assert retrieved is not None
         assert len(retrieved.relations) == 1

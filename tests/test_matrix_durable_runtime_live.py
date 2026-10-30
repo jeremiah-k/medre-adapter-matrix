@@ -13,6 +13,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import os
 import sqlite3
+from datetime import datetime, timezone
 from contextlib import closing
 from pathlib import Path
 from urllib.parse import quote
@@ -208,7 +209,8 @@ async def test_durable_runtime_native_ingress_restart_and_device_continuity(
                         assert marker in repr(sink.delivered_payloads[0].payload)
                 finally:
                     await asyncio.wait_for(app.stop(), 15)
-                storage = await SQLiteStorage.open_readonly(str(paths.database_path))
+                storage = SQLiteStorage(str(paths.database_path))
+                await storage.initialize()
                 try:
                     with closing(sqlite3.connect(paths.database_path)) as database:
                         for native_id in native_ids:
@@ -220,7 +222,11 @@ async def test_durable_runtime_native_ingress_restart_and_device_continuity(
                                 assert rows == []
                                 continue
                             assert len(rows) == 1
-                            event = await storage.get(rows[0][0])
+                            read = await storage.read_event_for_replay(
+                                rows[0][0], now=datetime.now(timezone.utc)
+                            )
+                            assert read.status == "retained"
+                            event = read.event
                             assert event is not None
                             assert "durable-sync-" in event.payload["body"]
                             assert (
