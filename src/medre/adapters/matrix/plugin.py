@@ -5,23 +5,19 @@ from medre.adapter_spec import AdapterSpec, DestinationSpec, SymbolRef
 
 
 def adapter_spec() -> AdapterSpec:
-    # Prompt metadata is optional; discovery works with released core versions
-    # that do not expose the authoring form contract.
-    native_setup = {}
-    NativeSetupField = getattr(registration, "NativeSetupField", None)
-    if NativeSetupField is not None:
-        native_setup["native_setup_fields"] = (
-            NativeSetupField("homeserver", "Homeserver URL"),
-            NativeSetupField("user_id", "Matrix user ID"),
-            NativeSetupField(
-                "access_token",
-                "Access token (blank uses configured sidecar)",
-                required=False,
-                secret=True,
-            ),
-        )
+    native_setup = (
+        registration.NativeSetupField("homeserver", "Homeserver URL"),
+        registration.NativeSetupField("user_id", "Matrix user ID"),
+        registration.NativeSetupField(
+            "access_token",
+            "Access token (blank uses configured sidecar)",
+            required=False,
+            secret=True,
+        ),
+    )
     return AdapterSpec(
-        **native_setup,
+        api_version=1,
+        native_setup_fields=native_setup,
         sample_config=SymbolRef("medre.adapters.matrix.sample", "sample_config"),
         stopped_state_declaration=SymbolRef(
             "medre.adapters.matrix.stopped_declaration", "declaration"
