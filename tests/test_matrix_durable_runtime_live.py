@@ -10,7 +10,6 @@ when native sync fails: missing real ingress is a failure.
 from __future__ import annotations
 
 import asyncio
-import json
 from contextlib import asynccontextmanager
 import os
 import sqlite3
@@ -22,6 +21,7 @@ from uuid import uuid4
 import pytest
 from medre.config.loader import load_config
 from medre.runtime.builder import RuntimeBuilder
+from medre.core.storage.sqlite.storage import SQLiteStorage
 from medre_matrix_tests.helpers.async_utils import wait_until
 
 pytestmark = [pytest.mark.local_integration, pytest.mark.matrix_sdk]
@@ -208,24 +208,30 @@ async def test_durable_runtime_native_ingress_restart_and_device_continuity(
                         assert marker in repr(sink.delivered_payloads[0].payload)
                 finally:
                     await asyncio.wait_for(app.stop(), 15)
-                with closing(sqlite3.connect(paths.database_path)) as database:
-                    for native_id in native_ids:
-                        rows = database.execute(
-                            "SELECT event_id,payload FROM canonical_events WHERE source_native_message_id=?",
-                            (native_id,),
-                        ).fetchall()
-                        if reject_encrypted:
-                            assert rows == []
-                            continue
-                        assert len(rows) == 1
-                        assert "durable-sync-" in json.loads(rows[0][1])["body"]
-                        assert (
-                            database.execute(
-                                "SELECT COUNT(*) FROM delivery_receipts WHERE event_id=? AND target_adapter='sink'",
-                                (rows[0][0],),
-                            ).fetchone()[0]
-                            >= 1
-                        )
+                storage = await SQLiteStorage.open_readonly(str(paths.database_path))
+                try:
+                    with closing(sqlite3.connect(paths.database_path)) as database:
+                        for native_id in native_ids:
+                            rows = database.execute(
+                                "SELECT event_id FROM canonical_events WHERE source_native_message_id=?",
+                                (native_id,),
+                            ).fetchall()
+                            if reject_encrypted:
+                                assert rows == []
+                                continue
+                            assert len(rows) == 1
+                            event = await storage.get(rows[0][0])
+                            assert event is not None
+                            assert "durable-sync-" in event.payload["body"]
+                            assert (
+                                database.execute(
+                                    "SELECT COUNT(*) FROM delivery_receipts WHERE event_id=? AND target_adapter='sink'",
+                                    (rows[0][0],),
+                                ).fetchone()[0]
+                                >= 1
+                            )
+                finally:
+                    await storage.close()
 
 
 async def test_delegated_login_reopens_same_native_device_store(tmp_path, monkeypatch):
