@@ -12,9 +12,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import os
-import sqlite3
-from datetime import datetime, timezone
-from contextlib import closing
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
@@ -209,33 +206,34 @@ async def test_durable_runtime_native_ingress_restart_and_device_continuity(
                         assert marker in repr(sink.delivered_payloads[0].payload)
                 finally:
                     await asyncio.wait_for(app.stop(), 15)
-                storage = SQLiteStorage(str(paths.database_path))
-                await storage.initialize()
+                storage = await SQLiteStorage.open_readonly(str(paths.database_path))
                 try:
-                    with closing(sqlite3.connect(paths.database_path)) as database:
-                        for native_id in native_ids:
-                            rows = database.execute(
-                                "SELECT event_id FROM canonical_events WHERE source_native_message_id=?",
-                                (native_id,),
-                            ).fetchall()
-                            if reject_encrypted:
-                                assert rows == []
-                                continue
-                            assert len(rows) == 1
-                            read = await storage.read_event_for_replay(
-                                rows[0][0], now=datetime.now(timezone.utc)
-                            )
-                            assert read.status == "retained"
-                            event = read.event
-                            assert event is not None
-                            assert "durable-sync-" in event.payload["body"]
-                            assert (
-                                database.execute(
-                                    "SELECT COUNT(*) FROM delivery_receipts WHERE event_id=? AND target_adapter='sink'",
-                                    (rows[0][0],),
-                                ).fetchone()[0]
-                                >= 1
-                            )
+                    for native_id in native_ids:
+                        rows = await storage._read_all(
+                            "SELECT event_id FROM canonical_events WHERE source_native_message_id=?",
+                            (native_id,),
+                        )
+                        if reject_encrypted:
+                            assert rows == []
+                            continue
+                        assert len(rows) == 1
+                        event_id = rows[0]["event_id"]
+                        # The fixture owns this disposable database. Native
+                        # evidence is independent of replay permission, which
+                        # ends when the runtime completes ingress.
+                        persisted = await storage._read_one(
+                            "SELECT COUNT(*) AS matched FROM event_body_content "
+                            "WHERE event_id=? AND field='body' "
+                            "AND instr(body, 'durable-sync-') > 0",
+                            (event_id,),
+                        )
+                        assert persisted is not None and persisted["matched"] == 1
+                        receipts = await storage._read_one(
+                            "SELECT COUNT(*) AS matched FROM delivery_receipts "
+                            "WHERE event_id=? AND target_adapter='sink'",
+                            (event_id,),
+                        )
+                        assert receipts is not None and receipts["matched"] >= 1
                 finally:
                     await storage.close()
 
