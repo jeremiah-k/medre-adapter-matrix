@@ -52,8 +52,8 @@ jobs:
       - name: Check Python quality and whitespace
         if: matrix.mode == 'fake' && matrix.python == '3.13'
         run: |
-          uvx --from ruff==0.16.9 ruff check src tests
-          uvx --from black==26.5.1 black --check src tests
+          uvx --from ruff==0.17.3 ruff check src tests
+          uvx --from black==26.10.1 black --check src tests
           git show --format= --check HEAD
       - name: Install core test environment
         run: uv sync --project .core --locked --extra dev
@@ -104,9 +104,10 @@ jobs:
         run: .core/.venv/bin/python -m pytest -v -m "matrix_sdk and not local_integration and not soak and not live and not hardware and not docker"
 
   windows-e2ee-contract:
-    # mindroom-nio 1.1.5 requires POSIX file leases. Restore this lane when
+    # mindroom-nio 1.1.5 requires POSIX file leases. Lane stays off until
     # Windows ownership support is released; crypto import is insufficient.
-    if: ${{ false }}
+    # Restore by setting the WINDOWS_E2EE_CONTRACT repository variable to 1.
+    if: vars.WINDOWS_E2EE_CONTRACT == '1'
     name: Windows Matrix E2EE SDK (py3.13)
     runs-on: windows-latest
     timeout-minutes: 20

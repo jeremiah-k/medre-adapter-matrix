@@ -5,9 +5,7 @@
   "description": "Versioned Matrix-native metadata stored in CanonicalEvent.metadata.native.data.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "matrix"
-  ],
+  "required": ["matrix"],
   "properties": {
     "matrix": {
       "$ref": "#/$defs/MatrixEvent"
@@ -85,19 +83,10 @@
     "Relation": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kind",
-        "target_event_id"
-      ],
+      "required": ["kind", "target_event_id"],
       "properties": {
         "kind": {
-          "enum": [
-            "reply",
-            "reaction",
-            "edit",
-            "thread",
-            "redaction"
-          ]
+          "enum": ["reply", "reaction", "edit", "thread", "redaction"]
         },
         "target_event_id": {
           "type": "string",
@@ -123,18 +112,10 @@
     "Media": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kind",
-        "encrypted"
-      ],
+      "required": ["kind", "encrypted"],
       "properties": {
         "kind": {
-          "enum": [
-            "image",
-            "audio",
-            "video",
-            "file"
-          ]
+          "enum": ["image", "audio", "video", "file"]
         },
         "encrypted": {
           "type": "boolean"
@@ -176,10 +157,7 @@
     "Encryption": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "event_encrypted",
-        "decrypted"
-      ],
+      "required": ["event_encrypted", "decrypted"],
       "properties": {
         "room_encrypted": {
           "type": "boolean"
@@ -198,9 +176,7 @@
     "Relay": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "medre_envelope"
-      ],
+      "required": ["medre_envelope"],
       "properties": {
         "medre_envelope": {
           "type": "object",
@@ -262,13 +238,7 @@
       }
     },
     "InteropScalar": {
-      "type": [
-        "string",
-        "integer",
-        "number",
-        "boolean",
-        "null"
-      ]
+      "type": ["string", "integer", "number", "boolean", "null"]
     },
     "MMRelay": {
       "type": "object",
@@ -306,11 +276,7 @@
     "BridgeContext": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "schema_version",
-        "source",
-        "relations"
-      ],
+      "required": ["schema_version", "source", "relations"],
       "properties": {
         "schema_version": {
           "const": 1
@@ -344,10 +310,7 @@
           "maxLength": 1024
         },
         "platform": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "canonical_event_id": {
@@ -356,45 +319,27 @@
           "maxLength": 1024
         },
         "channel": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "sender_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "sender_name": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "sender_short_name": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "sender_verification": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "origin_label": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "native_ref": {
@@ -425,17 +370,11 @@
           "maxLength": 1024
         },
         "target_event_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "key": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "target_native_ref": {
@@ -466,10 +405,7 @@
           "maxLength": 1024
         },
         "native_channel_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         },
         "native_message_id": {
@@ -478,10 +414,7 @@
           "maxLength": 1024
         },
         "native_thread_id": {
-          "type": [
-            "string",
-            "null"
-          ],
+          "type": ["string", "null"],
           "maxLength": 1024
         }
       }

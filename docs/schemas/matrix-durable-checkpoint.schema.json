@@ -5,13 +5,13 @@
   "additionalProperties": false,
   "required": ["schema_version", "abandoned_rooms"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": { "const": 1 },
     "abandoned_rooms": {
       "type": "object",
       "additionalProperties": {
         "type": "array",
         "uniqueItems": true,
-        "items": {"type": "string", "minLength": 1}
+        "items": { "type": "string", "minLength": 1 }
       }
     }
   }
