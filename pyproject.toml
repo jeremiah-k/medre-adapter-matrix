@@ -10,7 +10,7 @@ dependencies = ["medre>=0.1.0,<0.2.0", 'mindroom-nio[e2e]==1.2.1']
 
 [project.optional-dependencies]
 test = ["pytest==9.2.0", "pytest-asyncio==1.4.1.post1", "pytest-timeout==2.4.0", "jsonschema==4.26.0", "packaging==26.3"]
-e2e = ["mindroom-nio[e2e]==1.2.1"]
+e2e = ["mindroom-nio[e2e]==1.3.0"]
 
 [project.entry-points."medre.adapters"]
 matrix = "medre.adapters.matrix.plugin:adapter_spec"
