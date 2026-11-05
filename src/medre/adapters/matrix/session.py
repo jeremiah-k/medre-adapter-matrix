@@ -33,6 +33,11 @@ from typing import Any, Awaitable, Callable, Iterable, Literal, cast
 
 import medre.adapters.matrix.compat as _compat_mod
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
+from medre.adapters.matrix.device_trust import (
+    PeerDeviceTrustReport,
+    PeerRecipient,
+    describe_peer_device_trust,
+)
 from medre.adapters.matrix.durable_sync import (
     MatrixBatchConsumer,
     current_record,
@@ -652,6 +657,86 @@ class MatrixSession:
                 ):
                     return True
         return False
+
+    def peer_device_trust_report(self, room_id: str) -> PeerDeviceTrustReport:
+        """Collect recipient peer-device trust for *room_id* from the owned client.
+
+        The report is computed from the session-owned SDK client on every
+        call — no caching — so each send authorization sees the current
+        device view.  Duck-typed surfaces:
+
+        * ``client.room_devices(room_id)`` — the pinned SDK returns
+          ``{user_id: {device_id: OlmDevice}}`` for room members, raising
+          when the room is unknown; the mapping is adapter-owned through
+          :func:`describe_peer_device_trust`.
+        * ``client.rooms[room_id].users`` — room membership; members the
+          device view does not mention are reported with an empty device
+          list (unknown recipients).
+        * ``client.olm`` presence only matters through the SDK's own
+          ``room_devices`` result; an empty view is a trust gap, not an
+          exemption.
+
+        The adapter's own user is excluded: own-device trust is a
+        cross-signing concern, separate from peer-device trust.
+
+        Returns
+        -------
+        PeerDeviceTrustReport
+            Recipients with their device trust.  ``trust_view_available``
+            is ``False`` when the SDK exposed no device view at all, which
+            policy evaluation must treat as fail-closed.
+        """
+        client = self._client
+        if client is None:
+            return PeerDeviceTrustReport(
+                room_id=room_id, recipients=(), trust_view_available=False
+            )
+
+        own_user_id = self._config.user_id
+        devices_by_user: dict[str, dict[str, Any]] = {}
+        trust_view_available = False
+        room_devices = getattr(client, "room_devices", None)
+        if callable(room_devices):
+            try:
+                raw_view = room_devices(room_id)
+            except Exception:
+                raw_view = None
+            if isinstance(raw_view, dict):
+                trust_view_available = True
+                for user, devices in raw_view.items():
+                    if user == own_user_id:
+                        continue
+                    if isinstance(devices, dict):
+                        devices_by_user[user] = devices
+                    else:
+                        devices_by_user[user] = {}
+
+        # Membership completes the recipient set: a member the device view
+        # does not mention has no known device list, which is a trust gap.
+        rooms = getattr(client, "rooms", None)
+        if isinstance(rooms, dict):
+            room_obj = rooms.get(room_id)
+            users = getattr(room_obj, "users", None) if room_obj is not None else None
+            if isinstance(users, dict):
+                for user in users:
+                    if user != own_user_id:
+                        devices_by_user.setdefault(user, {})
+
+        recipients = tuple(
+            PeerRecipient(
+                user_id=user,
+                devices=tuple(
+                    describe_peer_device_trust(user, device_id, device)
+                    for device_id, device in sorted(devices.items())
+                ),
+            )
+            for user, devices in sorted(devices_by_user.items())
+        )
+        return PeerDeviceTrustReport(
+            room_id=room_id,
+            recipients=recipients,
+            trust_view_available=trust_view_available,
+        )
 
     @property
     def encrypted_room_count(self) -> int:
