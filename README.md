@@ -302,6 +302,39 @@ the account signing identity; ordinary login does not require rotating that
 identity. Keep the E2EE store when renewing credentials. A cross-signing reset
 replaces account identity material and can require verification in other clients.
 
+## Peer-device verification policy
+
+`verification_policy` governs encrypted sends to peer devices and has two
+states. `permissive` (the default) keeps today's delivery behavior: an
+encrypted send proceeds even when a recipient's devices are unverified or
+unknown, but every such delivery logs a warning naming the room, the devices,
+and the trust state, and increments the `peer_device_trust_warnings`
+diagnostic counter. `strict` binds at the encrypted-send authorization point
+and refuses the delivery with a retryable, actionable error that identifies
+the recipient, the offending device(s), and the remedy: verify the listed
+devices in a Matrix client signed in to this account. The adapter never
+auto-verifies peer devices, never falls back to a weaker transport, and never
+sends anyway. Trust is re-read on every attempt, so devices verified (or
+reset) between attempts are honored on the next one, and an unavailable
+device view fails closed under strict mode.
+
+The policy applies only to encrypted sends — crypto active and the room
+affirmatively encrypted. Plaintext delivery, ephemeral typing, and redactions
+are outside its scope. A recipient the adapter's device store cannot see at
+all counts as a trust gap in both modes; the adapter's own device is an
+own-device cross-signing concern, not peer-device trust.
+
+Pre-release decision note: `permissive` is the default for compatibility, and
+`strict` is intended to become the default in a later release. Flipping that
+default is a deliberate, separately reviewed change; do not rely on the
+current default for assurance.
+
+Neither mode proves delivery. A refused send is never delivered, but an
+encrypted send that passes the policy — even to fully verified devices — is
+only homeserver acceptance of the Megolm ciphertext. It is not a delivery
+receipt: nobody can observe from the send whether a peer device received,
+decrypted, or read the message.
+
 ## Transient typing
 
 Routes can explicitly opt in with `forward_typing: true` when both endpoints
