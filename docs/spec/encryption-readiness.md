@@ -58,6 +58,21 @@ current MEDRE adapter has no user-facing peer-verification command: strict
 mode is suitable only where local trust has independently been established.
 Own-device cross-signing cannot substitute for peer-device verification.
 
+The real-encrypted-peer-qualification precondition has been performed for
+this gate: one ordered Docker scenario (`tests/test_matrix_device_trust_docker.py`)
+drives `MatrixAdapter.deliver` on a real Synapse homeserver with genuine
+Megolm crypto and proves that the first strict delivery on a fresh session
+prepares room membership and is refused with the unverified peer device
+named, that affirmative local-store verification lets strict deliver while
+the peer decrypts the payload, that a trust reset refuses the next send,
+that local trust survives an adapter restart on the same store, and that
+the permissive default delivers despite gaps while recording diagnostics.
+This satisfies that precondition only: the separate review and a practical
+peer-verification/repair workflow remain open, `permissive` stays the
+default, and the scenario runs on a Docker loopback — it proves no
+federation, external network, cross-signing ceremony, or recipient-side
+read.
+
 Neither policy state proves delivery: an encrypted send accepted by the
 homeserver — even to fully verified devices — is ciphertext acceptance, not a
 delivery receipt. Peer-device trust MUST NOT be reported as proof that any
