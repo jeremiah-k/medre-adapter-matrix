@@ -261,6 +261,8 @@ class MatrixConfig:
 
         # --- verification_policy validation ---
         # Same case-sensitive enum discipline as the other policy modes.
+        if not isinstance(self.verification_policy, str):
+            raise MatrixConfigError("verification_policy must be a string")
         if self.verification_policy not in _VALID_VERIFICATION_POLICIES:
             raise MatrixConfigError(
                 f"verification_policy must be one of "

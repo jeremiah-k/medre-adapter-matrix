@@ -174,3 +174,19 @@ async def test_durable_joined_members_populates_cache_not_room_projection() -> N
     assert report.trust_view_available is True
     assert report.recipients[0].user_id == peer
     assert report.recipients[0].devices[0].verified is True
+
+
+def test_pinned_nio_keys_query_delegates_to_durable_locked_transaction() -> None:
+    """Review the real 1.3.0 SDK path, not an invented owner method."""
+    import inspect
+
+    import nio
+    from nio.durable.outbound import OutboundCrypto
+
+    entrypoint = inspect.getsource(nio.AsyncClient.keys_query)
+    locked_query = inspect.getsource(OutboundCrypto.keys_query)
+    queued_query = inspect.getsource(OutboundCrypto._keys_query)
+    assert "self._durable_session._outbound.keys_query" in entrypoint
+    assert "async with self.session._crypto_lock:" in locked_query
+    assert "await self._keys_query(user_set)" in locked_query
+    assert "with self.transaction():" in queued_query

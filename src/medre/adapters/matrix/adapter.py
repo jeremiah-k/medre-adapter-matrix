@@ -98,6 +98,7 @@ _MATRIX_CAPABILITIES = AdapterCapabilities(
 )
 
 # Delivery retry constants
+_MAX_PEER_TRUST_LOG_ROOMS: int = 1_024
 _MAX_DELIVERY_RETRIES: int = 3
 _DELIVERY_BACKOFF_BASE: float = 0.5  # 500ms
 _DELIVERY_BACKOFF_JITTER: float = 0.25
@@ -287,7 +288,7 @@ class MatrixAdapter(AdapterContract):
         # Peer-device verification policy stats
         "_peer_device_trust_warnings",
         "_peer_device_trust_strict_refusals",
-        "_peer_device_trust_last_log_at",
+        "_peer_device_trust_last_log_by_room",
         # Inbound diagnostics counters
         "_inbound_published",
         "_inbound_duplicate_admissions",
@@ -339,7 +340,7 @@ class MatrixAdapter(AdapterContract):
         # Peer-device verification policy stats
         self._peer_device_trust_warnings: int = 0
         self._peer_device_trust_strict_refusals: int = 0
-        self._peer_device_trust_last_log_at: float = float("-inf")
+        self._peer_device_trust_last_log_by_room: dict[str, float] = {}
         # Inbound diagnostics counters
         self._inbound_published: int = 0
         self._inbound_duplicate_admissions: int = 0
@@ -407,7 +408,7 @@ class MatrixAdapter(AdapterContract):
         # Peer-device verification policy stats — reset on start
         self._peer_device_trust_warnings = 0
         self._peer_device_trust_strict_refusals = 0
-        self._peer_device_trust_last_log_at = float("-inf")
+        self._peer_device_trust_last_log_by_room.clear()
         # Inbound diagnostics — reset on start
         self._inbound_published = 0
         self._inbound_duplicate_admissions = 0
@@ -893,15 +894,27 @@ class MatrixAdapter(AdapterContract):
         # This is a frequent, expected condition on bridged encrypted
         # rooms.  Preserve one counter per send, but never log one synchronous
         # warning per packet while the loop is under load.
-        now = time.monotonic()
-        if ctx is not None and now - self._peer_device_trust_last_log_at >= 60.0:
-            self._peer_device_trust_last_log_at = now
-            ctx.logger.warning(
-                "MatrixAdapter %s: %s (total_unverified_sends=%d)",
-                self.adapter_id,
-                format_peer_device_trust_warning(violation),
-                self._peer_device_trust_warnings,
-            )
+        if ctx is not None:
+            now = self._clock()
+            last = self._peer_device_trust_last_log_by_room.get(room_id)
+            if last is None or now < last or now - last >= 60.0:
+                # FIFO bounded across rooms. A new room must not be silenced
+                # by activity in an unrelated encrypted room.
+                if (
+                    last is None
+                    and len(self._peer_device_trust_last_log_by_room)
+                    >= _MAX_PEER_TRUST_LOG_ROOMS
+                ):
+                    self._peer_device_trust_last_log_by_room.pop(
+                        next(iter(self._peer_device_trust_last_log_by_room))
+                    )
+                self._peer_device_trust_last_log_by_room[room_id] = now
+                ctx.logger.warning(
+                    "MatrixAdapter %s: %s (total_unverified_sends=%d)",
+                    self.adapter_id,
+                    format_peer_device_trust_warning(violation),
+                    self._peer_device_trust_warnings,
+                )
 
     async def _on_room_typing(self, room_id: str, users: list[str]) -> None:
         """Publish one native replacement list without maintaining an actor cache."""

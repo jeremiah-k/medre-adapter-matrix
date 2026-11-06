@@ -694,6 +694,10 @@ class MatrixSession:
         if client is None:
             return unavailable
         durable_owner = getattr(client, "_durable_session", None)
+        if self._durable_sync_enabled and durable_owner is None:
+            # A detached durable client must never fall through to the
+            # ordinary SDK key-query path while the owner is unavailable.
+            return unavailable
 
         def still_owned() -> bool:
             return self._client is client and (
@@ -718,6 +722,9 @@ class MatrixSession:
             if self._peer_device_members(room_id) is None:
                 return unavailable
             if getattr(client, "should_query_keys", False) is True:
+                # mindroom-nio 1.3.0 delegates the public call to the
+                # durable outbound owner's locked, transactional query path
+                # when a durable session is attached. Do not bypass it.
                 await client.keys_query()
                 if not still_owned():
                     return unavailable

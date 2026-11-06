@@ -108,15 +108,21 @@ def describe_peer_device_trust(user_id: str, device_id: str, device: Any) -> Pee
     clients work; an unreadable state maps to ``"unknown"`` and stays
     unverified.
     """
-    trust_state = getattr(device, "trust_state", None)
-    name = getattr(trust_state, "name", None)
+    try:
+        trust_state = getattr(device, "trust_state", None)
+        name = getattr(trust_state, "name", None)
+        verified = getattr(device, "verified", None)
+    except Exception:
+        # Some SDK compatibility objects expose properties that raise while
+        # their backing store is unavailable. Treat that as an unreadable
+        # trust view, never as affirmative verification.
+        name, verified = "unknown", False
     if not isinstance(name, str) or not name:
         name = "unknown"
-    verified = getattr(device, "verified", None)
     # Do not let a contradictory duck-typed SDK view bypass a revoked,
     # blacklisted or ignored trust state.  In mindroom-nio both are derived
     # from the same enum, but tests and compatibility clients need this fence.
-    verified = name == "verified" and (verified is True or verified is None)
+    verified = name == "verified" and verified is True
     return PeerDevice(
         user_id=user_id,
         device_id=str(device_id),

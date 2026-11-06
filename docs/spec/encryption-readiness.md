@@ -32,9 +32,9 @@ and redactions MUST stay outside its scope.
 
 A peer device counts as trusted only when the SDK affirmatively marks it
 verified. Unset, blacklisted, or ignored trust states, unreadable trust state,
-a recipient with no known device list, an incomplete room-membership
-view (`members_synced` not true), and an unavailable device view are all
-trust gaps. The adapter MUST NOT auto-verify peer devices, MUST NOT fall back
+a recipient with no known device list, incomplete room membership (neither
+`members_synced` nor a complete durable outbound membership cache), and an
+unavailable device view are all trust gaps. The adapter MUST NOT auto-verify peer devices, MUST NOT fall back
 to a weaker transport, and MUST NOT deliver an authorized encrypted send to a
 recipient with trust gaps under `strict` policy: the send MUST be refused
 before any SDK send call with a retryable, actionable error naming the room,
@@ -47,9 +47,11 @@ preparing group-session sharing cannot bypass the earlier snapshot. A nio
 not a permanent delivery failure.
 
 Under `permissive` policy the same trust gaps MUST produce loud diagnostics —
-a rate-limited warning naming the room, devices, and trust state, plus a
-per-send diagnostics counter — without changing delivery behavior. A
-sustained permissive stream MUST NOT emit one synchronous warning per send.
+a per-room rate-limited warning naming the room, devices, and trust state,
+plus a per-send diagnostics counter — without changing delivery behavior.
+Each room has its own 60-second warning interval; the warning timestamp
+cache is bounded to 1,024 room IDs, evicting its oldest entry for a new room.
+A sustained permissive stream MUST NOT emit one synchronous warning per send.
 The default is `permissive` for compatibility. `strict` MUST NOT become the default without a separate
 review, a practical peer-verification/repair workflow, and real encrypted-peer
 qualification. mindroom-nio's `verified` flag describes **local device-store
@@ -83,7 +85,10 @@ complete room membership after the SDK's `joined_members` request; durable
 sessions reuse the SDK's locked membership preparation, invalidated outbound
 membership cache, and active
 device store, without rewriting the durable room projection. Pending device-key
-queries MUST complete before strict authorization. Lookup/query failures and
+queries MUST complete before strict authorization. Durable key refreshes MUST
+use the pinned SDK's `AsyncClient.keys_query`, which delegates to its durable
+outbound crypto owner under the crypto lock and transactional capture; callers
+MUST NOT bypass the owner or invent a second mutable query path. Lookup/query failures and
 membership invalidation MUST remain fail-closed; cancellation MUST propagate.
 The adapter's current device is excluded from peer checks, but sibling devices
 of its own account remain recipients and MUST be affirmatively verified.
