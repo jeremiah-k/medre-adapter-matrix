@@ -793,3 +793,29 @@ class TestMatrixConfigVerificationPolicy:
             verification_policy="strict",
         )
         assert "verification_policy='strict'" in repr(config)
+
+
+def test_runtime_yaml_accepts_the_declared_verification_policy(tmp_path, monkeypatch):
+    from medre.config.loader import load_config
+
+    monkeypatch.setenv("MEDRE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("MEDRE_CONFIG", raising=False)
+    path = tmp_path / "bridge.yaml"
+    path.write_text(
+        """adapters:
+  matrix:
+    secure:
+      adapter_kind: real
+      homeserver: https://matrix.example.org
+      user_id: "@bot:example.org"
+      access_token: test-only-token
+      encryption_mode: e2ee_required
+      verification_policy: strict
+""",
+        encoding="utf-8",
+    )
+    config, _, _ = load_config(path)
+    assert (
+        config.adapters.for_transport("matrix")["secure"].config.verification_policy
+        == "strict"
+    )

@@ -77,9 +77,9 @@ class PeerDeviceTrustReport:
     room_id:
         Target room of the encrypted send.
     recipients:
-        Every room recipient other than the adapter's own user, in stable
-        order.  The adapter's own device is an own-device cross-signing
-        concern, not peer-device trust.
+        Every room recipient device other than the adapter's current
+        device, in stable order. Sibling devices of the adapter's account
+        remain recipients and require affirmative verification.
     trust_view_available:
         ``False`` when the SDK exposed no device view at all: trust cannot
         be established for any recipient and the policy must fail closed.
@@ -113,8 +113,12 @@ def describe_peer_device_trust(user_id: str, device_id: str, device: Any) -> Pee
     if not isinstance(name, str) or not name:
         name = "unknown"
     verified = getattr(device, "verified", None)
-    if not isinstance(verified, bool):
-        verified = name == "verified"
+    # Do not let a contradictory duck-typed SDK view bypass a revoked,
+    # blacklisted or ignored trust state.  In mindroom-nio both are derived
+    # from the same enum, but tests and compatibility clients need this fence.
+    verified = name == "verified" and (
+        verified is True or verified is None
+    )
     return PeerDevice(
         user_id=user_id,
         device_id=str(device_id),
@@ -157,6 +161,11 @@ def evaluate_peer_device_trust(
     )
 
 
+def _display_identifier(value: str) -> str:
+    """Escape terminal controls while preserving the native identity in policy."""
+    return ascii(value)[1:-1]
+
+
 def describe_peer_device_trust_violation(violation: PeerDeviceTrustViolation) -> str:
     """Describe the trust gaps of a violation in one operator-readable string."""
     parts: list[str] = []
@@ -164,15 +173,18 @@ def describe_peer_device_trust_violation(violation: PeerDeviceTrustViolation) ->
         parts.append(
             "unverified devices: "
             + ", ".join(
-                f"{device.user_id}/{device.device_id} "
-                f"(trust state: {device.trust_state})"
+                f"{_display_identifier(device.user_id)}/{_display_identifier(device.device_id)} "
+                f"(trust state: {_display_identifier(device.trust_state)})"
                 for device in violation.unverified_devices
             )
         )
     if violation.unknown_recipients:
         parts.append(
             "recipients with no known device list: "
-            + ", ".join(sorted(violation.unknown_recipients))
+            + ", ".join(
+                _display_identifier(user)
+                for user in sorted(violation.unknown_recipients)
+            )
         )
     if not violation.trust_view_available:
         parts.append("the peer-device trust view is unavailable")
@@ -183,7 +195,7 @@ def format_peer_device_trust_warning(violation: PeerDeviceTrustViolation) -> str
     """Format the permissive-mode diagnostic for one delivery with trust gaps."""
     return (
         "encrypted send to Matrix room "
-        f"{violation.room_id} addresses peer-device trust gaps "
+        f"{_display_identifier(violation.room_id)} addresses peer-device trust gaps "
         f"({describe_peer_device_trust_violation(violation)}); delivery "
         "proceeds under verification_policy='permissive'"
     )
@@ -196,13 +208,23 @@ def format_peer_device_trust_refusal(violation: PeerDeviceTrustViolation) -> str
     and the verification remedy.  It never implies that the adapter can or
     will verify devices on the operator's behalf.
     """
+    if not violation.trust_view_available:
+        return (
+            f"verification_policy='strict' refused the encrypted send to Matrix "
+            f"room {_display_identifier(violation.room_id)}: the peer-device trust view is unavailable. "
+            "Room membership and device keys must load successfully before "
+            "retrying; check homeserver reachability and session sync. "
+            "MEDRE never auto-verifies devices or falls back to plaintext."
+        )
     return (
         f"verification_policy='strict' refused the encrypted send to Matrix "
-        f"room {violation.room_id}: "
+        f"room {_display_identifier(violation.room_id)}: "
         f"{describe_peer_device_trust_violation(violation)}. Verify the "
-        "listed devices in a Matrix client signed in to this account "
-        "(interactive device verification or trusted cross-signing "
-        "identity); MEDRE never auto-verifies peer devices and never falls "
-        "back to a weaker transport. The delivery stays retryable and "
-        "completes once every recipient device is verified."
+        "listed devices in MEDRE's own nio device store before retrying. "
+        "Verification performed in another Matrix client does not automatically "
+        "mark MEDRE's local devices trusted; MEDRE does not currently provide "
+        "an operator peer-verification workflow. Use permissive mode when "
+        "that local trust cannot be established. MEDRE never auto-verifies "
+        "devices or falls back to plaintext. A retry remains blocked until "
+        "the local trust view is complete and verified."
     )

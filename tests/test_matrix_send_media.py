@@ -219,7 +219,7 @@ class StubEgressSession:
     def is_room_member(self, room_id: str) -> bool:
         return True
 
-    def peer_device_trust_report(self, room_id: str) -> Any:
+    async def peer_device_trust_report(self, room_id: str) -> Any:
         # Media transfer tests exercise the upload/send seam, not trust
         # policy: an empty recipient list is an all-clear trust report.
         return PeerDeviceTrustReport(room_id=room_id, recipients=())

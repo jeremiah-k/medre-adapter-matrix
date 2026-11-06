@@ -287,6 +287,7 @@ class MatrixAdapter(AdapterContract):
         # Peer-device verification policy stats
         "_peer_device_trust_warnings",
         "_peer_device_trust_strict_refusals",
+        "_peer_device_trust_last_log_at",
         # Inbound diagnostics counters
         "_inbound_published",
         "_inbound_duplicate_admissions",
@@ -338,6 +339,7 @@ class MatrixAdapter(AdapterContract):
         # Peer-device verification policy stats
         self._peer_device_trust_warnings: int = 0
         self._peer_device_trust_strict_refusals: int = 0
+        self._peer_device_trust_last_log_at: float = float("-inf")
         # Inbound diagnostics counters
         self._inbound_published: int = 0
         self._inbound_duplicate_admissions: int = 0
@@ -405,6 +407,7 @@ class MatrixAdapter(AdapterContract):
         # Peer-device verification policy stats — reset on start
         self._peer_device_trust_warnings = 0
         self._peer_device_trust_strict_refusals = 0
+        self._peer_device_trust_last_log_at = float("-inf")
         # Inbound diagnostics — reset on start
         self._inbound_published = 0
         self._inbound_duplicate_admissions = 0
@@ -589,8 +592,8 @@ class MatrixAdapter(AdapterContract):
     def _should_ignore_unverified_devices(self) -> bool:
         """Determine whether to pass ``ignore_unverified_devices=True`` to nio.
 
-        MEDRE internally sets this to ``True`` when E2EE is active (i.e.
-        ``encryption_mode`` is not ``"plaintext"``).  This is an intentional
+        MEDRE sets this to ``True`` only for permissive encrypted
+        delivery; strict requests nio enforcement as an additional fence.  This is an intentional
         bot delivery flag, not a cross-signing workaround.  Cross-signing
         authenticates MEDRE's own current device to other Matrix clients;
         it does not make MEDRE trust every peer device in a room.
@@ -598,10 +601,14 @@ class MatrixAdapter(AdapterContract):
         Peer-device trust is governed separately by the configured
         ``verification_policy`` at the encrypted-send authorization point:
         ``permissive`` (default) records diagnostics and delivers, while
-        ``strict`` refuses the send before this flag is consulted.  For
-        plaintext mode the flag is ``False``.
+        ``strict`` also refuses unverified devices through nio's own
+        group-session sharing path, because membership and key state can
+        change after the adapter preflight snapshot.
         """
-        return self._config.encryption_mode != "plaintext"
+        return (
+            self._config.encryption_mode != "plaintext"
+            and self._config.verification_policy != "strict"
+        )
 
     async def health_check(self) -> AdapterInfo:
         """Return a snapshot of the adapter's current health.
@@ -747,7 +754,7 @@ class MatrixAdapter(AdapterContract):
             retry_after_seconds=remaining,
         )
 
-    def _check_encrypted_room_safety(
+    async def _check_encrypted_room_safety(
         self, room_id: str, *, room_encrypted: bool, peer_trust: bool = True
     ) -> None:
         """Enforce the configured room-encryption send policy for *room_id*.
@@ -802,7 +809,7 @@ class MatrixAdapter(AdapterContract):
             return
 
         if peer_trust:
-            self._check_peer_device_trust(room_id, room_encrypted=room_encrypted)
+            await self._check_peer_device_trust(room_id, room_encrypted=room_encrypted)
 
         if self._config.require_encrypted_rooms:
             if not self._session.crypto_enabled:
@@ -841,7 +848,9 @@ class MatrixAdapter(AdapterContract):
                 transient=False,
             )
 
-    def _check_peer_device_trust(self, room_id: str, *, room_encrypted: bool) -> None:
+    async def _check_peer_device_trust(
+        self, room_id: str, *, room_encrypted: bool
+    ) -> None:
         """Apply the configured ``verification_policy`` to one encrypted send.
 
         The policy binds at the encrypted-send authorization point: it
@@ -869,7 +878,7 @@ class MatrixAdapter(AdapterContract):
         session = self._session
         if session is None or not session.crypto_enabled:
             return
-        report = session.peer_device_trust_report(room_id)
+        report = await session.peer_device_trust_report(room_id)
         violation = evaluate_peer_device_trust(report)
         if violation is None:
             return
@@ -881,11 +890,17 @@ class MatrixAdapter(AdapterContract):
             )
         self._peer_device_trust_warnings += 1
         ctx = self.ctx
-        if ctx is not None:
+        # This is a frequent, expected condition on bridged encrypted
+        # rooms.  Preserve one counter per send, but never log one synchronous
+        # warning per packet while the loop is under load.
+        now = time.monotonic()
+        if ctx is not None and now - self._peer_device_trust_last_log_at >= 60.0:
+            self._peer_device_trust_last_log_at = now
             ctx.logger.warning(
-                "MatrixAdapter %s: %s",
+                "MatrixAdapter %s: %s (total_unverified_sends=%d)",
                 self.adapter_id,
                 format_peer_device_trust_warning(violation),
+                self._peer_device_trust_warnings,
             )
 
     async def _on_room_typing(self, room_id: str, users: list[str]) -> None:
@@ -926,7 +941,7 @@ class MatrixAdapter(AdapterContract):
             raise AdapterPermanentError("Unconfigured Matrix typing room")
         # Typing is ephemeral activity disclosure, not encrypted content
         # delivery: the peer-device verification policy does not apply.
-        self._check_encrypted_room_safety(
+        await self._check_encrypted_room_safety(
             room, room_encrypted=session.is_room_encrypted(room), peer_trust=False
         )
         await session.room_typing(
@@ -1059,7 +1074,7 @@ class MatrixAdapter(AdapterContract):
                 else False
             )
             try:
-                self._check_encrypted_room_safety(
+                await self._check_encrypted_room_safety(
                     room_id, room_encrypted=room_encrypted
                 )
             except MatrixSendError as exc:
@@ -1203,6 +1218,30 @@ class MatrixAdapter(AdapterContract):
                 raise
             except Exception as exc:
                 last_exc = exc
+                # nio may refresh device keys while preparing encryption,
+                # after our earlier local trust snapshot.  An SDK refusal
+                # here is pre-handoff and must remain an operator-repairable
+                # trust blocker, not a permanent delivery failure or an
+                # in-adapter network retry.  Never weaken the SDK flag.
+                if (
+                    self._config.verification_policy == "strict"
+                    and type(exc).__name__ == "OlmUnverifiedDeviceError"
+                ):
+                    self._peer_device_trust_strict_refusals += 1
+                    device = getattr(exc, "device", None)
+                    user_id = getattr(device, "user_id", None)
+                    device_id = getattr(device, "id", None)
+                    device_ref = (
+                        f"{ascii(user_id)}/{ascii(device_id)}"
+                        if isinstance(user_id, str) and isinstance(device_id, str)
+                        else "unknown device"
+                    )
+                    raise AdapterSendError(
+                        f"Matrix nio rejected unverified device {device_ref} "
+                        f"while preparing room encryption for {room_id!a}; "
+                        "MEDRE's local nio device trust must be established before retrying",
+                        transient=True,
+                    ) from exc
                 if _is_transient_error(exc):
                     self._transient_delivery_failures += 1
                     if attempt < _MAX_DELIVERY_RETRIES - 1:
@@ -1277,7 +1316,9 @@ class MatrixAdapter(AdapterContract):
         # sync landing between them cannot flip plaintext/encrypted mode.
         room_encrypted = bool(self._session.is_room_encrypted(room_id))
         try:
-            self._check_encrypted_room_safety(room_id, room_encrypted=room_encrypted)
+            await self._check_encrypted_room_safety(
+                room_id, room_encrypted=room_encrypted
+            )
         except MatrixSendError as exc:
             if exc.transient:
                 raise AdapterSendError(str(exc), transient=True) from exc

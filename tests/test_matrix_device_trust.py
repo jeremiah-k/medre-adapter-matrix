@@ -96,7 +96,8 @@ def _stub_client(
     """Build a duck-typed nio client with room membership and a device view."""
     client = MagicMock(name="nio_client")
     client.room_send = AsyncMock(return_value=SimpleNamespace(event_id="$evt-trust-ok"))
-    client.rooms = {ROOM: SimpleNamespace(users=room_users)}
+    client.device_id = "BOTDEV"
+    client.rooms = {ROOM: SimpleNamespace(users=room_users, members_synced=True)}
     client.room_devices = MagicMock(return_value=device_view)
     return client
 
@@ -237,8 +238,9 @@ class TestTrustMessageFormatting:
         assert f"{CAROL}/CAROLDEV (trust state: unset)" in message
         assert f"no known device list: {ALICE}" in message
         assert "Verify the listed devices" in message
+        assert "MEDRE's own nio device store" in message
         assert "never auto-verifies" in message
-        assert "never falls back to a weaker transport" in message
+        assert "falls back to plaintext" in message
 
     def test_refusal_names_unavailable_trust_view(self) -> None:
         report = PeerDeviceTrustReport(
@@ -286,7 +288,7 @@ class TestSessionTrustReport:
         session._client = _stub_client(room_users, device_view)
         return session
 
-    def test_report_excludes_own_user_from_peer_trust(self) -> None:
+    async def test_report_excludes_own_user_from_peer_trust(self) -> None:
         session = self._session_with_client(
             {ALICE: {}, OWN_USER: {}},
             {
@@ -294,33 +296,33 @@ class TestSessionTrustReport:
                 OWN_USER: {"BOTDEV": _FakeDevice(False, "unset")},
             },
         )
-        report = session.peer_device_trust_report(ROOM)
+        report = await session.peer_device_trust_report(ROOM)
         assert report.room_id == ROOM
         assert report.trust_view_available is True
         assert [recipient.user_id for recipient in report.recipients] == [ALICE]
 
-    def test_member_without_device_entry_is_unknown_recipient(self) -> None:
+    async def test_member_without_device_entry_is_unknown_recipient(self) -> None:
         session = self._session_with_client(
             {ALICE: {}, DAVE: {}},
             {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}},
         )
-        report = session.peer_device_trust_report(ROOM)
+        report = await session.peer_device_trust_report(ROOM)
         assert [recipient.user_id for recipient in report.recipients] == [ALICE, DAVE]
         assert report.recipients[1].devices == ()
 
-    def test_device_without_readable_state_maps_to_unknown(self) -> None:
+    async def test_device_without_readable_state_maps_to_unknown(self) -> None:
         session = self._session_with_client(
             {ALICE: {}},
             {ALICE: {"ALICEDEV": SimpleNamespace()}},
         )
-        report = session.peer_device_trust_report(ROOM)
+        report = await session.peer_device_trust_report(ROOM)
         device = report.recipients[0].devices[0]
         assert device.trust_state == "unknown"
         assert device.verified is False
 
-    def test_missing_client_fails_closed(self) -> None:
+    async def test_missing_client_fails_closed(self) -> None:
         session = MatrixSession(_make_config())
-        report = session.peer_device_trust_report(ROOM)
+        report = await session.peer_device_trust_report(ROOM)
         assert report.trust_view_available is False
 
 
@@ -412,8 +414,8 @@ class TestStrictVerificationRefusal:
             await adapter.deliver(_make_result())
         assert client.room_send.await_count == 0
 
-        # The operator verifies Carol's device in a Matrix client; the SDK
-        # device store now reports it verified.
+        # MEDRE's local nio device store reports Carol verified.
+        # Verifying in another Matrix client alone would not update it.
         verified = device_view[CAROL]["CAROLDEV"]
         verified.verified = True
         verified.trust_state = SimpleNamespace(name="verified")
@@ -667,8 +669,328 @@ class TestRuntimeRestart:
 
 
 def test_delivery_flag_unchanged_by_verification_policy() -> None:
-    """The nio send flag keeps its E2EE behavior under both policy states."""
+    """Strict adds nio's own pre-handoff trust check; permissive preserves delivery."""
     strict = MatrixAdapter(_make_config(verification_policy="strict"))
     permissive = MatrixAdapter(_make_config(verification_policy="permissive"))
-    assert strict._should_ignore_unverified_devices() is True
+    assert strict._should_ignore_unverified_devices() is False
     assert permissive._should_ignore_unverified_devices() is True
+
+
+async def test_strict_requires_complete_room_membership_before_sdk_send() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    client.rooms[ROOM].members_synced = False
+    _wire_encrypted_session(adapter, client, config)
+
+    with pytest.raises(AdapterSendError, match="trust view is unavailable"):
+        await adapter.deliver(_make_result())
+    client.room_send.assert_not_awaited()
+
+
+async def test_strict_requires_readable_room_membership() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    client.rooms[ROOM].users = None
+    _wire_encrypted_session(adapter, client, config)
+    with pytest.raises(AdapterSendError, match="trust view is unavailable"):
+        await adapter.deliver(_make_result())
+    client.room_send.assert_not_awaited()
+
+
+def test_verified_flag_cannot_override_blacklisted_state() -> None:
+    from medre.adapters.matrix.device_trust import describe_peer_device_trust
+
+    device = describe_peer_device_trust(
+        ALICE, "ALICEDEV", _FakeDevice(True, "blacklisted")
+    )
+    assert device.verified is False
+    assert (
+        evaluate_peer_device_trust(
+            PeerDeviceTrustReport(ROOM, (PeerRecipient(ALICE, (device,)),))
+        )
+        is not None
+    )
+
+
+async def test_strict_uses_nio_device_enforcement_even_after_preflight() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    _wire_encrypted_session(adapter, client, config)
+    await adapter.deliver(_make_result())
+    assert client.room_send.await_args.kwargs["ignore_unverified_devices"] is False
+
+
+async def test_nio_new_unverified_device_blocks_after_preflight() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    _wire_encrypted_session(adapter, client, config)
+    nio_error_type = type("OlmUnverifiedDeviceError", (Exception,), {})
+    client.room_send.side_effect = nio_error_type("new unverified device")
+    with pytest.raises(AdapterSendError, match="local nio device trust") as err:
+        await adapter.deliver(_make_result())
+    assert err.value.transient is True
+    assert client.room_send.await_count == 1
+    assert client.room_send.await_args.kwargs["ignore_unverified_devices"] is False
+    assert adapter.diagnostics()["peer_device_trust_strict_refusals"] == 1
+
+
+async def test_permissive_warnings_coalesce_without_losing_counts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = _make_config()
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(_mixed_room_users(), _mixed_device_view())
+    _wire_encrypted_session(adapter, client, config)
+    with caplog.at_level(logging.WARNING, logger="test.matrix-device-trust"):
+        for _ in range(4):
+            await adapter.deliver(_make_result())
+    assert client.room_send.await_count == 4
+    assert adapter.diagnostics()["peer_device_trust_warnings"] == 4
+    assert (
+        len([r for r in caplog.records if "peer-device trust gaps" in r.getMessage()])
+        == 1
+    )
+
+
+async def test_fresh_strict_send_fetches_members_and_keys_before_authorization() -> (
+    None
+):
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    client.rooms[ROOM].members_synced = False
+    client.should_query_keys = True
+    order = []
+
+    async def members(_room):
+        order.append("members")
+        client.rooms[ROOM].members_synced = True
+
+    async def keys():
+        order.append("keys")
+        client.should_query_keys = False
+
+    async def send(**kwargs):
+        order.append("send")
+        return SimpleNamespace(event_id="$fresh")
+
+    client.joined_members = AsyncMock(side_effect=members)
+    client.keys_query = AsyncMock(side_effect=keys)
+    client.room_send.side_effect = send
+    _wire_encrypted_session(adapter, client, config)
+    await adapter.deliver(_make_result())
+    assert order == ["members", "keys", "send"]
+    client.joined_members.assert_awaited_once_with(ROOM)
+    client.keys_query.assert_awaited_once()
+    assert client.room_send.await_args.kwargs["ignore_unverified_devices"] is False
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_membership_refresh_failure_never_sends(cancelled: bool) -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    client.rooms[ROOM].members_synced = False
+    client.joined_members = AsyncMock(
+        side_effect=(
+            asyncio.CancelledError() if cancelled else RuntimeError("lookup failed")
+        )
+    )
+    _wire_encrypted_session(adapter, client, config)
+    with pytest.raises(asyncio.CancelledError if cancelled else AdapterSendError):
+        await adapter.deliver(_make_result())
+    client.joined_members.assert_awaited_once_with(ROOM)
+    client.room_send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("query_fails", [False, True])
+async def test_unsettled_key_query_never_authorizes_strict_send(
+    query_fails: bool,
+) -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    client.should_query_keys = True
+    client.keys_query = AsyncMock(
+        side_effect=RuntimeError("keys failed") if query_fails else None
+    )
+    _wire_encrypted_session(adapter, client, config)
+    with pytest.raises(AdapterSendError, match="membership and device keys must load"):
+        await adapter.deliver(_make_result())
+    client.keys_query.assert_awaited_once()
+    client.room_send.assert_not_awaited()
+
+
+def _durable_client():
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    client.rooms[ROOM].members_synced = False
+    alice = _FakeDevice(True, "verified")
+    alice.id = "ALICEDEV"
+    carol = _FakeDevice(False, "unset")
+    carol.id = "CAROLDEV"
+    store = {ALICE: [alice], CAROL: [carol], OWN_USER: []}
+    client.device_store.active_user_devices.side_effect = lambda user: store[user]
+    client._durable_session = SimpleNamespace(
+        _outbound=SimpleNamespace(member_cache={})
+    )
+    client.should_query_keys = False
+    return client
+
+
+async def test_durable_lookup_uses_complete_sdk_cache_and_active_device_store() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _durable_client()
+
+    async def members(_room):
+        # nio's durable lookup does not mutate room.users/members_synced.
+        client._durable_session._outbound.member_cache[ROOM] = [OWN_USER, ALICE, CAROL]
+
+    client._durable_session._outbound.ensure_members = AsyncMock(side_effect=members)
+    session = _wire_encrypted_session(adapter, client, config)
+    session._durable_sync_enabled = True
+    with pytest.raises(AdapterSendError, match="CAROLDEV"):
+        await adapter.deliver(_make_result())
+    assert client.rooms[ROOM].members_synced is False
+    assert CAROL not in client.rooms[ROOM].users
+    client._durable_session._outbound.ensure_members.assert_awaited_once_with(ROOM)
+    client.room_devices.assert_not_called()
+    client.room_send.assert_not_awaited()
+
+
+async def test_durable_membership_invalidation_during_keys_query_fails_closed() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _durable_client()
+    client._durable_session._outbound.member_cache[ROOM] = [ALICE]
+    client.should_query_keys = True
+
+    async def keys():
+        client._durable_session._outbound.member_cache.clear()
+        client.should_query_keys = False
+
+    client.keys_query = AsyncMock(side_effect=keys)
+    session = _wire_encrypted_session(adapter, client, config)
+    session._durable_sync_enabled = True
+    with pytest.raises(AdapterSendError, match="trust view is unavailable"):
+        await adapter.deliver(_make_result())
+    client.room_send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("sibling_verified", [None, False, True])
+async def test_own_account_siblings_remain_recipients(sibling_verified) -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    devices = {"BOTDEV": _FakeDevice(False, "unset")}
+    if sibling_verified is not None:
+        devices["SIBLING"] = _FakeDevice(
+            sibling_verified, "verified" if sibling_verified else "unset"
+        )
+    client = _stub_client({OWN_USER: {}}, {OWN_USER: devices})
+    _wire_encrypted_session(adapter, client, config)
+    if sibling_verified is False:
+        with pytest.raises(AdapterSendError, match="SIBLING"):
+            await adapter.deliver(_make_result())
+        client.room_send.assert_not_awaited()
+    else:
+        await adapter.deliver(_make_result())
+        client.room_send.assert_awaited_once()
+
+
+async def test_sdk_race_refusal_names_safe_identifiers_without_key_material() -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    client = _stub_client(
+        {ALICE: {}}, {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    )
+    _wire_encrypted_session(adapter, client, config)
+    error = type("OlmUnverifiedDeviceError", (Exception,), {})("SDK refusal")
+    error.device = SimpleNamespace(
+        user_id=ALICE, id="NEW\nDEVICE", keys={"ed25519": "private-key-material"}
+    )
+    client.room_send.side_effect = error
+    with pytest.raises(AdapterSendError) as raised:
+        await adapter.deliver(_make_result())
+    message = str(raised.value)
+    assert ALICE in message and ROOM in message and r"NEW\nDEVICE" in message
+    assert "\n" not in message and "private-key-material" not in message
+    assert raised.value.transient is True
+    assert raised.value.__cause__ is error
+    assert client.room_send.await_count == 1
+
+
+@pytest.mark.parametrize("during", ["members", "keys"])
+async def test_client_replacement_during_refresh_discards_stale_trust(during) -> None:
+    config = _make_config(verification_policy="strict")
+    adapter = MatrixAdapter(config)
+    adapter.ctx = _make_ctx()
+    trusted = {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+    client = _stub_client({ALICE: {}}, trusted)
+    replacement = _stub_client({ALICE: {}}, trusted)
+    session = _wire_encrypted_session(adapter, client, config)
+
+    async def replace_client(*args):
+        session._client = replacement
+
+    if during == "members":
+        client.rooms[ROOM].members_synced = False
+        client.joined_members = AsyncMock(side_effect=replace_client)
+    else:
+        client.should_query_keys = True
+        client.keys_query = AsyncMock(side_effect=replace_client)
+    with pytest.raises(AdapterSendError, match="trust view is unavailable"):
+        await adapter.deliver(_make_result())
+    client.room_send.assert_not_awaited()
+    replacement.room_send.assert_not_awaited()
+
+
+def test_trust_diagnostics_escape_native_identifier_controls() -> None:
+    report = PeerDeviceTrustReport(
+        "!room\n:example.org",
+        (
+            PeerRecipient(
+                "@peer:example.org",
+                (PeerDevice("@peer:example.org", "DEVICE\x1b[31m", "unset", False),),
+            ),
+        ),
+    )
+    violation = evaluate_peer_device_trust(report)
+    assert violation is not None
+    for message in [
+        format_peer_device_trust_refusal(violation),
+        format_peer_device_trust_warning(violation),
+    ]:
+        assert "\n" not in message and "\x1b" not in message
+        assert r"\n" in message and r"\x1b" in message

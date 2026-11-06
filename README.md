@@ -306,17 +306,20 @@ replaces account identity material and can require verification in other clients
 
 `verification_policy` governs encrypted sends to peer devices and has two
 states. `permissive` (the default) keeps today's delivery behavior: an
-encrypted send proceeds even when a recipient's devices are unverified or
-unknown, but every such delivery logs a warning naming the room, the devices,
-and the trust state, and increments the `peer_device_trust_warnings`
-diagnostic counter. `strict` binds at the encrypted-send authorization point
-and refuses the delivery with a retryable, actionable error that identifies
-the recipient, the offending device(s), and the remedy: verify the listed
-devices in a Matrix client signed in to this account. The adapter never
-auto-verifies peer devices, never falls back to a weaker transport, and never
-sends anyway. Trust is re-read on every attempt, so devices verified (or
-reset) between attempts are honored on the next one, and an unavailable
-device view fails closed under strict mode.
+encrypted send proceeds even when recipient devices are unverified or
+unknown. Each such delivery increments the `peer_device_trust_warnings`
+diagnostic counter, while a rate-limited warning names the room, devices,
+and their trust state. `strict` refuses encrypted sends when the local nio
+device store does not affirmatively trust every known peer device, when the
+room's membership snapshot is incomplete, or when the device view cannot be
+read. It also passes `ignore_unverified_devices=False` to nio's own
+group-session preparation, which may discover devices after MEDRE's preflight.
+This is a local device-store policy: verifying a peer in another Matrix client
+does not automatically establish MEDRE's device trust. MEDRE exposes no
+operator peer-verification workflow today; operators who cannot maintain
+local trust should continue using `permissive`. No automatic verification or
+plaintext downgrade occurs. An SDK trust refusal is repairable before handoff
+but is not evidence of successful delivery.
 
 The policy applies only to encrypted sends — crypto active and the room
 affirmatively encrypted. Plaintext delivery, ephemeral typing, and redactions
@@ -325,7 +328,8 @@ all counts as a trust gap in both modes; the adapter's own device is an
 own-device cross-signing concern, not peer-device trust.
 
 Pre-release decision note: `permissive` is the default for compatibility, and
-`strict` is intended to become the default in a later release. Flipping that
+`strict` is NOT scheduled to become the default until a separate,
+independently qualified peer-verification workflow exists. Flipping that
 default is a deliberate, separately reviewed change; do not rely on the
 current default for assurance.
 

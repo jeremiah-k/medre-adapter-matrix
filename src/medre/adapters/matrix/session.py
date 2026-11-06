@@ -658,85 +658,123 @@ class MatrixSession:
                     return True
         return False
 
-    def peer_device_trust_report(self, room_id: str) -> PeerDeviceTrustReport:
-        """Collect recipient peer-device trust for *room_id* from the owned client.
+    def _peer_device_members(self, room_id: str) -> tuple[str, ...] | None:
+        """Read the complete recipient set used by the pinned SDK's send path."""
+        client = self._client
+        rooms = getattr(client, "rooms", None)
+        room = rooms.get(room_id) if isinstance(rooms, dict) else None
+        if room is None:
+            return None
+        if getattr(room, "members_synced", None) is True:
+            users = getattr(room, "users", None)
+            return tuple(users) if isinstance(users, dict) else None
+        if self._durable_sync_enabled:
+            # mindroom-nio 1.3.0 keeps joined_members results here without
+            # changing the durable room projection or members_synced flag.
+            owner = getattr(client, "_durable_session", None)
+            outbound = getattr(owner, "_outbound", None)
+            cache = getattr(outbound, "member_cache", None)
+            users = cache.get(room_id) if isinstance(cache, dict) else None
+            if isinstance(users, list) and all(isinstance(user, str) for user in users):
+                return tuple(users)
+        return None
 
-        The report is computed from the session-owned SDK client on every
-        call — no caching — so each send authorization sees the current
-        device view.  Duck-typed surfaces:
+    async def peer_device_trust_report(self, room_id: str) -> PeerDeviceTrustReport:
+        """Prepare membership and device keys, then read current local trust.
 
-        * ``client.room_devices(room_id)`` — the pinned SDK returns
-          ``{user_id: {device_id: OlmDevice}}`` for room members, raising
-          when the room is unknown; the mapping is adapter-owned through
-          :func:`describe_peer_device_trust`.
-        * ``client.rooms[room_id].users`` — room membership; members the
-          device view does not mention are reported with an empty device
-          list (unknown recipients).
-        * ``client.olm`` presence only matters through the SDK's own
-          ``room_devices`` result; an empty view is a trust gap, not an
-          exemption.
-
-        The adapter's own user is excluded: own-device trust is a
-        cross-signing concern, separate from peer-device trust.
-
-        Returns
-        -------
-        PeerDeviceTrustReport
-            Recipients with their device trust.  ``trust_view_available``
-            is ``False`` when the SDK exposed no device view at all, which
-            policy evaluation must treat as fail-closed.
+        Preparation uses the session-owned SDK APIs and never changes device
+        verification. Durable membership comes from the SDK's outbound cache,
+        rather than treating a partial room projection as a complete list.
+        Failed refreshes remain unavailable; cancellation always propagates.
         """
+        unavailable = PeerDeviceTrustReport(
+            room_id=room_id, recipients=(), trust_view_available=False
+        )
         client = self._client
         if client is None:
-            return PeerDeviceTrustReport(
-                room_id=room_id, recipients=(), trust_view_available=False
+            return unavailable
+        durable_owner = getattr(client, "_durable_session", None)
+
+        def still_owned() -> bool:
+            return self._client is client and (
+                not self._durable_sync_enabled
+                or getattr(client, "_durable_session", None) is durable_owner
             )
+
+        try:
+            if self._peer_device_members(room_id) is None:
+                if self._durable_sync_enabled:
+                    # Reuse nio's locked cache check, including when multiple
+                    # deliveries race the first membership lookup.
+                    outbound = getattr(durable_owner, "_outbound", None)
+                    lookup = getattr(outbound, "ensure_members", None)
+                else:
+                    lookup = getattr(client, "joined_members", None)
+                if not callable(lookup):
+                    return unavailable
+                await lookup(room_id)
+                if not still_owned():
+                    return unavailable
+            if self._peer_device_members(room_id) is None:
+                return unavailable
+            if getattr(client, "should_query_keys", False) is True:
+                await client.keys_query()
+                if not still_owned():
+                    return unavailable
+                if getattr(client, "should_query_keys", False) is True:
+                    return unavailable
+            # Membership may be invalidated while keys are being refreshed.
+            users = self._peer_device_members(room_id)
+            if users is None:
+                return unavailable
+            rooms = getattr(client, "rooms", {})
+            room = rooms.get(room_id) if isinstance(rooms, dict) else None
+            if (
+                self._durable_sync_enabled
+                and getattr(room, "members_synced", None) is not True
+            ):
+                # room_devices reads room.users and therefore omits members
+                # held only in the durable outbound cache. Use the same active
+                # device store that nio uses when sharing group sessions.
+                active_devices = client.device_store.active_user_devices
+                raw_view = {
+                    user: {device.id: device for device in active_devices(user)}
+                    for user in users
+                }
+            else:
+                raw_view = client.room_devices(room_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return unavailable
+        if not isinstance(raw_view, dict):
+            return unavailable
 
         own_user_id = self._config.user_id
-        devices_by_user: dict[str, dict[str, Any]] = {}
-        trust_view_available = False
-        room_devices = getattr(client, "room_devices", None)
-        if callable(room_devices):
-            try:
-                raw_view = room_devices(room_id)
-            except Exception:
-                raw_view = None
-            if isinstance(raw_view, dict):
-                trust_view_available = True
-                for user, devices in raw_view.items():
-                    if user == own_user_id:
-                        continue
-                    if isinstance(devices, dict):
-                        devices_by_user[user] = devices
-                    else:
-                        devices_by_user[user] = {}
-
-        # Membership completes the recipient set: a member the device view
-        # does not mention has no known device list, which is a trust gap.
-        rooms = getattr(client, "rooms", None)
-        if isinstance(rooms, dict):
-            room_obj = rooms.get(room_id)
-            users = getattr(room_obj, "users", None) if room_obj is not None else None
-            if isinstance(users, dict):
-                for user in users:
-                    if user != own_user_id:
-                        devices_by_user.setdefault(user, {})
-
-        recipients = tuple(
-            PeerRecipient(
-                user_id=user,
-                devices=tuple(
-                    describe_peer_device_trust(user, device_id, device)
-                    for device_id, device in sorted(devices.items())
-                ),
+        own_device_id = getattr(client, "device_id", None)
+        recipients: list[PeerRecipient] = []
+        for user in sorted(users):
+            devices = raw_view.get(user, {})
+            if not isinstance(devices, dict):
+                devices = {}
+            if user == own_user_id:
+                # Sibling devices receive room keys too. Only this session's
+                # own device is outside peer-recipient verification.
+                devices = {
+                    key: value for key, value in devices.items() if key != own_device_id
+                }
+                if not devices:
+                    continue
+            recipients.append(
+                PeerRecipient(
+                    user_id=user,
+                    devices=tuple(
+                        describe_peer_device_trust(user, device_id, device)
+                        for device_id, device in sorted(devices.items())
+                    ),
+                )
             )
-            for user, devices in sorted(devices_by_user.items())
-        )
-        return PeerDeviceTrustReport(
-            room_id=room_id,
-            recipients=recipients,
-            trust_view_available=trust_view_available,
-        )
+        return PeerDeviceTrustReport(room_id=room_id, recipients=tuple(recipients))
 
     @property
     def encrypted_room_count(self) -> int:
