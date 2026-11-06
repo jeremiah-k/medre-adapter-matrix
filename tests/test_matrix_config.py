@@ -687,3 +687,135 @@ def test_matrix_relay_prefix_int_rejected(monkeypatch: pytest.MonkeyPatch) -> No
     )
     with pytest.raises(MatrixConfigError, match="relay_prefix must be a str, got int"):
         config.validate()
+
+
+# ===================================================================
+# verification_policy field
+# ===================================================================
+
+
+class TestMatrixConfigVerificationPolicy:
+    """verification_policy field defaults and validation."""
+
+    def test_default_is_permissive(self) -> None:
+        """Default verification_policy is 'permissive' — the historical behavior."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+        )
+        assert config.verification_policy == "permissive"
+
+    @pytest.mark.parametrize("policy", ["permissive", "strict"])
+    def test_valid_policy_accepted(self, policy: str) -> None:
+        """Both declared policy states are accepted."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            verification_policy=policy,
+        )
+        result = config.validate()
+        assert result.verification_policy == policy
+
+    def test_unknown_policy_rejected(self) -> None:
+        """Unknown policy value raises."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            verification_policy="paranoid",
+        )
+        with pytest.raises(MatrixConfigError, match="verification_policy"):
+            config.validate()
+
+    def test_typo_policy_rejected(self) -> None:
+        """Transposition typo ('permisive') is rejected like other enums."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            verification_policy="permisive",
+        )
+        with pytest.raises(MatrixConfigError, match="verification_policy"):
+            config.validate()
+
+    def test_uppercase_variant_rejected(self) -> None:
+        """Casing matters — 'STRICT' (upper) is rejected; only 'strict' accepted."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            verification_policy="STRICT",
+        )
+        with pytest.raises(MatrixConfigError, match="verification_policy"):
+            config.validate()
+
+    @pytest.mark.parametrize("value", [None, True, False, 1])
+    def test_non_string_policy_rejected(self, value: object) -> None:
+        """Non-string policy values are rejected."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            verification_policy=value,  # type: ignore[arg-type]
+        )
+        with pytest.raises(MatrixConfigError, match="verification_policy"):
+            config.validate()
+
+    def test_strict_policy_valid_with_plaintext_mode(self) -> None:
+        """Strict policy is valid with plaintext mode (inert there, not contradictory)."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            encryption_mode="plaintext",
+            verification_policy="strict",
+        )
+        result = config.validate()
+        assert result.verification_policy == "strict"
+        assert result.encryption_mode == "plaintext"
+
+    def test_repr_shows_verification_policy(self) -> None:
+        """The redacted repr surfaces the selected verification policy."""
+        config = MatrixConfig(
+            adapter_id="matrix-1",
+            homeserver="https://matrix.example.com",
+            user_id="@bot:example.com",
+            access_token="s3cret",
+            verification_policy="strict",
+        )
+        assert "verification_policy='strict'" in repr(config)
+
+
+def test_runtime_yaml_accepts_the_declared_verification_policy(tmp_path, monkeypatch):
+    from medre.config.loader import load_config
+
+    monkeypatch.setenv("MEDRE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("MEDRE_CONFIG", raising=False)
+    path = tmp_path / "bridge.yaml"
+    path.write_text(
+        """adapters:
+  matrix:
+    secure:
+      adapter_kind: real
+      homeserver: https://matrix.example.org
+      user_id: "@bot:example.org"
+      access_token: test-only-token
+      encryption_mode: e2ee_required
+      verification_policy: strict
+""",
+        encoding="utf-8",
+    )
+    config, _, _ = load_config(path)
+    assert (
+        config.adapters.for_transport("matrix")["secure"].config.verification_policy
+        == "strict"
+    )

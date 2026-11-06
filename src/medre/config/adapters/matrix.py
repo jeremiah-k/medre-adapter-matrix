@@ -21,6 +21,9 @@ _VALID_ENCRYPTION_MODES: frozenset[str] = frozenset(
     {"plaintext", "e2ee_required", "e2ee_optional"}
 )
 
+VerificationPolicy = Literal["permissive", "strict"]
+_VALID_VERIFICATION_POLICIES: frozenset[str] = frozenset({"permissive", "strict"})
+
 MetadataEmbeddingMode = Literal["off", "minimal", "safe", "full"]
 _VALID_METADATA_EMBEDDING_MODES: frozenset[str] = frozenset(
     {"off", "minimal", "safe", "full"}
@@ -82,6 +85,16 @@ class MatrixConfig:
     encryption_mode:
         Encryption policy: ``"plaintext"`` (default), ``"e2ee_required"``,
         or ``"e2ee_optional"``.
+    verification_policy:
+        Peer-device trust policy for encrypted sends.  ``"permissive"``
+        (default) delivers to unverified or unknown peer devices but logs
+        a warning and counts every delivery with such trust gaps.
+        ``"strict"`` refuses the send at the encrypted-send authorization
+        point with a retryable, actionable error naming the offending
+        devices and the verification remedy.  The adapter never
+        auto-verifies peer devices.  The policy applies only to encrypted
+        sends (crypto active and the room established as encrypted);
+        plaintext delivery and ephemeral typing are out of scope.
     require_encrypted_rooms:
         When ``True``, the adapter should only operate in encrypted
         rooms.  Invalid with ``encryption_mode="plaintext"``.
@@ -106,6 +119,7 @@ class MatrixConfig:
     megolm_key_request_rate_limit_per_minute: int = 30
     megolm_key_request_max_inflight: int = 4
     encryption_mode: str = "plaintext"
+    verification_policy: str = "permissive"
     require_encrypted_rooms: bool = False
     auto_join_rooms: tuple[str, ...] = ()
     origin_label: str = ""
@@ -245,6 +259,17 @@ class MatrixConfig:
                 f"got {self.metadata_embedding_mode!r}"
             )
 
+        # --- verification_policy validation ---
+        # Same case-sensitive enum discipline as the other policy modes.
+        if not isinstance(self.verification_policy, str):
+            raise MatrixConfigError("verification_policy must be a string")
+        if self.verification_policy not in _VALID_VERIFICATION_POLICIES:
+            raise MatrixConfigError(
+                f"verification_policy must be one of "
+                f"{sorted(_VALID_VERIFICATION_POLICIES)}, "
+                f"got {self.verification_policy!r}"
+            )
+
         if self.encryption_mode == "e2ee_required":
             pass  # device_id and store_path are derived internally
             # by the adapter session (whoami() + state dir convention).
@@ -335,6 +360,7 @@ class MatrixConfig:
             f"user_id={self.user_id!r}, "
             f"access_token={token_preview!r}, "
             f"encryption_mode={self.encryption_mode!r}, "
+            f"verification_policy={self.verification_policy!r}, "
             f"room_allowlist={self.room_allowlist!r}, "
             f"auto_join_rooms={self.auto_join_rooms!r})"
         )

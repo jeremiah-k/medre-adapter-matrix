@@ -21,6 +21,83 @@ MUST NOT replace the startup dependency or repair diagnosis. Undecryptable-event
 counters remain available, and event-specific diagnostics MAY replace the last
 error only while crypto is operational or no startup diagnosis exists.
 
+## Peer-device verification policy
+
+The adapter MUST expose an explicit `verification_policy` with exactly two
+states: `permissive` and `strict`. The configured policy binds at the
+encrypted-send authorization point, together with the encrypted-room safety
+layers, and applies only to encrypted sends (crypto active and the room
+affirmatively established as encrypted). Plaintext delivery, ephemeral typing,
+and redactions MUST stay outside its scope.
+
+A peer device counts as trusted only when the SDK affirmatively marks it
+verified. Unset, blacklisted, or ignored trust states, unreadable trust state,
+a recipient with no known device list, incomplete room membership (neither
+`members_synced` nor a complete durable outbound membership cache), and an
+unavailable device view are all trust gaps. The adapter MUST NOT auto-verify peer devices, MUST NOT fall back
+to a weaker transport, and MUST NOT deliver an authorized encrypted send to a
+recipient with trust gaps under `strict` policy: the send MUST be refused
+before any SDK send call with a retryable, actionable error naming the room,
+the offending devices, and the verification remedy. Trust state MUST be
+re-read on every delivery attempt so devices verified or reset between
+attempts are honored on the next one. Under `strict`, the adapter MUST also
+pass `ignore_unverified_devices=False` to nio so a device discovered while
+preparing group-session sharing cannot bypass the earlier snapshot. A nio
+`OlmUnverifiedDeviceError` before room handoff is a retryable trust refusal,
+not a permanent delivery failure.
+
+Under `permissive` policy the same trust gaps MUST produce loud diagnostics —
+a per-room rate-limited warning naming the room, devices, and trust state,
+plus a per-send diagnostics counter — without changing delivery behavior.
+Each room has its own 60-second warning interval; the warning timestamp
+cache is bounded to 1,024 room IDs, evicting its oldest entry for a new room.
+A sustained permissive stream MUST NOT emit one synchronous warning per send.
+The default is `permissive` for compatibility. `strict` MUST NOT become the default without a separate
+review, a practical peer-verification/repair workflow, and real encrypted-peer
+qualification. mindroom-nio's `verified` flag describes **local device-store
+trust**, not automatic trust inherited from another Matrix client. The
+current MEDRE adapter has no user-facing peer-verification command: strict
+mode is suitable only where local trust has independently been established.
+Own-device cross-signing cannot substitute for peer-device verification.
+
+The real-encrypted-peer-qualification precondition has been performed for
+this gate: one ordered Docker scenario (`tests/test_matrix_device_trust_docker.py`)
+drives `MatrixAdapter.deliver` on a real Synapse homeserver with genuine
+Megolm crypto and proves that the first strict delivery on a fresh session
+prepares room membership and is refused with the unverified peer device
+named, that affirmative local-store verification lets strict deliver while
+the peer decrypts the payload, that a trust reset refuses the next send,
+that local trust survives an adapter restart on the same store, and that
+the permissive default delivers despite gaps while recording diagnostics.
+This satisfies that precondition only: the separate review and a practical
+peer-verification/repair workflow remain open, `permissive` stays the
+default, and the scenario runs on a Docker loopback — it proves no
+federation, external network, cross-signing ceremony, or recipient-side
+read.
+
+Neither policy state proves delivery: an encrypted send accepted by the
+homeserver — even to fully verified devices — is ciphertext acceptance, not a
+delivery receipt. Peer-device trust MUST NOT be reported as proof that any
+peer device received or decrypted a message.
+
+Membership preparation MUST precede trust evaluation. Classic sessions use
+complete room membership after the SDK's `joined_members` request; durable
+sessions reuse the SDK's locked membership preparation, invalidated outbound
+membership cache, and active
+device store, without rewriting the durable room projection. Pending device-key
+queries MUST complete before strict authorization. Durable key refreshes MUST
+use the pinned SDK's `AsyncClient.keys_query`, which delegates to its durable
+outbound crypto owner under the crypto lock and transactional capture; callers
+MUST NOT bypass the owner or invent a second mutable query path. Lookup/query failures and
+membership invalidation MUST remain fail-closed; cancellation MUST propagate.
+The adapter's current device is excluded from peer checks, but sibling devices
+of its own account remain recipients and MUST be affirmatively verified.
+Client or durable-owner replacement during preparation MUST invalidate the
+report rather than combining trust state from different sessions. Diagnostic
+identifiers MUST escape terminal controls without changing policy identity.
+SDK refusals after preflight MUST identify the room and available user/device
+IDs without key material or raw terminal controls.
+
 ## Health diagnosis
 
 Adapter health MUST expose reason codes for pending initial sync acknowledgement,

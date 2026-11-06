@@ -21,6 +21,7 @@ import pytest
 from medre.adapters.fakes.matrix import FakeMatrixAdapter
 from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.device_trust import PeerDeviceTrustReport
 from medre.adapters.matrix.outbound import (
     MATRIX_OPERATION_KEY,
     MatrixOutboundOperation,
@@ -217,6 +218,11 @@ class StubEgressSession:
 
     def is_room_member(self, room_id: str) -> bool:
         return True
+
+    async def peer_device_trust_report(self, room_id: str) -> Any:
+        # Media transfer tests exercise the upload/send seam, not trust
+        # policy: an empty recipient list is an all-clear trust report.
+        return PeerDeviceTrustReport(room_id=room_id, recipients=())
 
     async def upload_media(
         self,

@@ -302,6 +302,43 @@ the account signing identity; ordinary login does not require rotating that
 identity. Keep the E2EE store when renewing credentials. A cross-signing reset
 replaces account identity material and can require verification in other clients.
 
+## Peer-device verification policy
+
+`verification_policy` governs encrypted sends to peer devices and has two
+states. `permissive` (the default) keeps today's delivery behavior: an
+encrypted send proceeds even when recipient devices are unverified or
+unknown. Each such delivery increments the `peer_device_trust_warnings`
+diagnostic counter, while a rate-limited warning names the room, devices,
+and their trust state. `strict` refuses encrypted sends when the local nio
+device store does not affirmatively trust every known peer device, when the
+room's membership snapshot is incomplete, or when the device view cannot be
+read. It also passes `ignore_unverified_devices=False` to nio's own
+group-session preparation, which may discover devices after MEDRE's preflight.
+This is a local device-store policy: verifying a peer in another Matrix client
+does not automatically establish MEDRE's device trust. MEDRE exposes no
+operator peer-verification workflow today; operators who cannot maintain
+local trust should continue using `permissive`. No automatic verification or
+plaintext downgrade occurs. An SDK trust refusal is repairable before handoff
+but is not evidence of successful delivery.
+
+The policy applies only to encrypted sends — crypto active and the room
+affirmatively encrypted. Plaintext delivery, ephemeral typing, and redactions
+are outside its scope. A recipient the adapter's device store cannot see at
+all counts as a trust gap in both modes; the adapter's own device is an
+own-device cross-signing concern, not peer-device trust.
+
+Pre-release decision note: `permissive` is the default for compatibility, and
+`strict` is NOT scheduled to become the default until a separate,
+independently qualified peer-verification workflow exists. Flipping that
+default is a deliberate, separately reviewed change; do not rely on the
+current default for assurance.
+
+Neither mode proves delivery. A refused send is never delivered, but an
+encrypted send that passes the policy — even to fully verified devices — is
+only homeserver acceptance of the Megolm ciphertext. It is not a delivery
+receipt: nobody can observe from the send whether a peer device received,
+decrypted, or read the message.
+
 ## Transient typing
 
 Routes can explicitly opt in with `forward_typing: true` when both endpoints
