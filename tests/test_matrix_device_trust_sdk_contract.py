@@ -35,12 +35,14 @@ def test_pinned_nio_exposes_local_trust_and_sdk_refusal() -> None:
 
     assert callable(getattr(nio.AsyncClient, "room_devices", None))
     assert callable(getattr(nio.AsyncClient, "verify_device", None))
-    assert "ignore_unverified_devices" in inspect.signature(
-        nio.AsyncClient.room_send
-    ).parameters
-    assert "ignore_unverified_devices" in inspect.signature(
-        nio.AsyncClient.share_group_session
-    ).parameters
+    assert (
+        "ignore_unverified_devices"
+        in inspect.signature(nio.AsyncClient.room_send).parameters
+    )
+    assert (
+        "ignore_unverified_devices"
+        in inspect.signature(nio.AsyncClient.share_group_session).parameters
+    )
 
 
 def test_pinned_nio_room_membership_starts_incomplete() -> None:

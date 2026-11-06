@@ -116,9 +116,7 @@ def describe_peer_device_trust(user_id: str, device_id: str, device: Any) -> Pee
     # Do not let a contradictory duck-typed SDK view bypass a revoked,
     # blacklisted or ignored trust state.  In mindroom-nio both are derived
     # from the same enum, but tests and compatibility clients need this fence.
-    verified = name == "verified" and (
-        verified is True or verified is None
-    )
+    verified = name == "verified" and (verified is True or verified is None)
     return PeerDevice(
         user_id=user_id,
         device_id=str(device_id),
