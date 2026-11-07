@@ -252,7 +252,6 @@ class TestTrustMessageFormatting:
         assert "trust view is unavailable" in message
 
 
-
 # ===================================================================
 # Session trust report collection
 # ===================================================================
@@ -479,7 +478,9 @@ class TestDefaultEncryptedDelivery:
             devices = _mixed_device_view()
         client = _stub_client(users, devices)
         _wire_encrypted_session(adapter, client, config)
-        report = AsyncMock(side_effect=AssertionError("default must not query peer trust"))
+        report = AsyncMock(
+            side_effect=AssertionError("default must not query peer trust")
+        )
         monkeypatch.setattr(MatrixSession, "peer_device_trust_report", report)
 
         with caplog.at_level(logging.WARNING, logger="test.matrix-device-trust"):
