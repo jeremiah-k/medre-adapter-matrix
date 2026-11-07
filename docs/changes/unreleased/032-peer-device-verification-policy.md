@@ -1,12 +1,8 @@
 # Add explicit peer-device verification policy for encrypted sends
 
 Introduce `verification_policy` on the Matrix adapter configuration with two
-states. `permissive` (the default) preserves current delivery behavior while
-making previously silent trust gaps observable: every encrypted send to a
-recipient with unverified or unknown devices, or without an available device
-view, increments `peer_device_trust_warnings` on every send and emits
-a bounded per-room rate-limited warning naming the room, devices, and trust
-state.
+states. `permissive` (the default) preserves encrypted delivery without
+scanning local peer-device trust or warning about routine trust gaps.
 `strict` refuses such sends at the encrypted-send authorization point before
 any SDK send call, with a retryable, actionable error naming the recipient,
 the offending devices, and the verification remedy. The adapter never

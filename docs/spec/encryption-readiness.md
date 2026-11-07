@@ -38,27 +38,24 @@ unavailable device view are all trust gaps. The adapter MUST NOT auto-verify pee
 to a weaker transport, and MUST NOT deliver an authorized encrypted send to a
 recipient with trust gaps under `strict` policy: the send MUST be refused
 before any SDK send call with a retryable, actionable error naming the room,
-the offending devices, and the verification remedy. Trust state MUST be
+the offending devices, and the verification remedy. Under `strict`, trust state MUST be
 re-read on every delivery attempt so devices verified or reset between
-attempts are honored on the next one. Under `strict`, the adapter MUST also
+attempts are honored on the next one. The adapter MUST also
 pass `ignore_unverified_devices=False` to nio so a device discovered while
 preparing group-session sharing cannot bypass the earlier snapshot. A nio
 `OlmUnverifiedDeviceError` before room handoff is a retryable trust refusal,
 not a permanent delivery failure.
 
-Under `permissive` policy the same trust gaps MUST produce loud diagnostics —
-a per-room rate-limited warning naming the room, devices, and trust state,
-plus a per-send diagnostics counter — without changing delivery behavior.
-Each room has its own 60-second warning interval; the warning timestamp
-cache is bounded to 1,024 room IDs, evicting its oldest entry for a new room.
-A sustained permissive stream MUST NOT emit one synchronous warning per send.
-The default is `permissive` for compatibility. `strict` MUST NOT become the default without a separate
-review, a practical peer-verification/repair workflow, and real encrypted-peer
-qualification. mindroom-nio's `verified` flag describes **local device-store
-trust**, not automatic trust inherited from another Matrix client. The
-current MEDRE adapter has no user-facing peer-verification command: strict
-mode is suitable only where local trust has independently been established.
-Own-device cross-signing cannot substitute for peer-device verification.
+Under `permissive` policy (the default), encrypted sends MUST preserve
+normal delivery behavior without evaluating peer-device trust, querying the
+session peer-device store, or emitting routine trust-gap warnings or counters.
+This default is not an affirmation that a peer is verified; it reflects the
+absence of a supported end-to-end peer-verification workflow. The optional
+`strict` gate MUST NOT become the default without a separate review, a
+practical local peer-verification/repair workflow and qualification. A nio
+`verified` flag describes **local device-store trust**, not trust inherited
+from another Matrix client. Own-device cross-signing is independent of peer
+verification and MUST remain available in normal operation.
 
 The real-encrypted-peer-qualification precondition has been performed for
 this gate: one ordered Docker scenario (`tests/test_matrix_device_trust_docker.py`)
@@ -68,7 +65,7 @@ prepares room membership and is refused with the unverified peer device
 named, that affirmative local-store verification lets strict deliver while
 the peer decrypts the payload, that a trust reset refuses the next send,
 that local trust survives an adapter restart on the same store, and that
-the permissive default delivers despite gaps while recording diagnostics.
+the default delivers without performing an additional peer-device trust scan.
 This satisfies that precondition only: the separate review and a practical
 peer-verification/repair workflow remain open, `permissive` stays the
 default, and the scenario runs on a Docker loopback — it proves no
@@ -80,7 +77,8 @@ homeserver — even to fully verified devices — is ciphertext acceptance, not 
 delivery receipt. Peer-device trust MUST NOT be reported as proof that any
 peer device received or decrypted a message.
 
-Membership preparation MUST precede trust evaluation. Classic sessions use
+Under the opt-in strict gate, membership preparation MUST precede trust
+evaluation. Classic sessions use
 complete room membership after the SDK's `joined_members` request; durable
 sessions reuse the SDK's locked membership preparation, invalidated outbound
 membership cache, and active

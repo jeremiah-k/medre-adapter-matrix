@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -47,6 +48,7 @@ from medre.adapters.fakes.matrix import FakeMatrixAdapter
 from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.compat import HAS_E2EE
 from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import AdapterContext, AdapterSendError
 from medre.core.engine.pipeline import PipelineConfig, PipelineRunner
@@ -654,6 +656,7 @@ async def _init_peer_client(env: SynapseDockerEnv, store_path: str) -> Any:
 async def test_peer_device_verification_policy_docker_qualification(
     synapse39_env: SynapseDockerEnv,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Prove the strict peer-device gate on a real encrypted room.
 
@@ -665,8 +668,7 @@ async def test_peer_device_verification_policy_docker_qualification(
     payload.  Phase C: unverifying refuses again on the next send.
     Phase D: after an adapter restart on the same store, strict delivers
     without re-verification — local trust survives restarts.  Phase E: a
-    default (permissive) adapter delivers despite trust gaps and records
-    the diagnostics counter.
+    default adapter delivers without a peer-device scan or trust-gap warning.
     """
     env = synapse39_env
     room_id = env.encrypted_room_id
@@ -723,7 +725,7 @@ async def test_peer_device_verification_policy_docker_qualification(
             await strict_rig.adapter.deliver(_make_result(room_id, body_a, seq))
         refusal = str(excinfo.value)
         assert excinfo.value.transient is True, "strict refusal must be retryable"
-        assert "verification_policy='strict' refused" in refusal
+        assert "Matrix encrypted send blocked" in refusal
         assert "unverified devices:" in refusal, refusal
         assert env.test_user_id in refusal
         assert peer_device_id in refusal
@@ -762,7 +764,7 @@ async def test_peer_device_verification_policy_docker_qualification(
         body_c = f"matrix39 phase C unverified again {seq}"
         with pytest.raises(AdapterSendError) as excinfo_c:
             await strict_rig.adapter.deliver(_make_result(room_id, body_c, seq))
-        assert "verification_policy='strict' refused" in str(excinfo_c.value)
+        assert "Matrix encrypted send blocked" in str(excinfo_c.value)
         assert "unverified devices:" in str(excinfo_c.value)
         verdict["phases"]["unverified_refuses_again"] = {"outcome": "refused"}
 
@@ -804,16 +806,21 @@ async def test_peer_device_verification_policy_docker_qualification(
         await _await_bot_sees_peer_device(permissive_rig, env.test_user_id)
         seq += 1
         body_e = f"matrix39 phase E permissive delivery {seq}"
-        delivered_e = await permissive_rig.adapter.deliver(
-            _make_result(room_id, body_e, seq)
+        peer_scan = AsyncMock(
+            side_effect=AssertionError("default delivery must not scan peer trust")
         )
+        with monkeypatch.context() as guard:
+            guard.setattr(MatrixSession, "peer_device_trust_report", peer_scan)
+            delivered_e = await permissive_rig.adapter.deliver(
+                _make_result(room_id, body_e, seq)
+            )
+        peer_scan.assert_not_awaited()
         assert delivered_e.native_message_id
         assert delivered_e.native_message_id.startswith("$")
-        assert permissive_rig.adapter._peer_device_trust_warnings >= 1
         assert permissive_rig.adapter._peer_device_trust_strict_refusals == 0
         verdict["phases"]["permissive_default_delivers"] = {
             "outcome": "delivered",
-            "warnings_recorded": permissive_rig.adapter._peer_device_trust_warnings,
+            "default_peer_trust_scan": "not_performed",
         }
     finally:
         if strict_rig is not None:

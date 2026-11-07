@@ -27,7 +27,6 @@ __all__ = [
     "describe_peer_device_trust_violation",
     "evaluate_peer_device_trust",
     "format_peer_device_trust_refusal",
-    "format_peer_device_trust_warning",
 ]
 
 
@@ -195,18 +194,8 @@ def describe_peer_device_trust_violation(violation: PeerDeviceTrustViolation) ->
     return "; ".join(parts)
 
 
-def format_peer_device_trust_warning(violation: PeerDeviceTrustViolation) -> str:
-    """Format the permissive-mode diagnostic for one delivery with trust gaps."""
-    return (
-        "encrypted send to Matrix room "
-        f"{_display_identifier(violation.room_id)} addresses peer-device trust gaps "
-        f"({describe_peer_device_trust_violation(violation)}); delivery "
-        "proceeds under verification_policy='permissive'"
-    )
-
-
 def format_peer_device_trust_refusal(violation: PeerDeviceTrustViolation) -> str:
-    """Format the strict-mode refusal with the operator remedy.
+    """Format a peer-device authorization refusal with the available remedy.
 
     The message identifies the room, every offending recipient and device,
     and the verification remedy.  It never implies that the adapter can or
@@ -214,21 +203,19 @@ def format_peer_device_trust_refusal(violation: PeerDeviceTrustViolation) -> str
     """
     if not violation.trust_view_available:
         return (
-            f"verification_policy='strict' refused the encrypted send to Matrix "
+            "Matrix encrypted send blocked for "
             f"room {_display_identifier(violation.room_id)}: the peer-device trust view is unavailable. "
             "Room membership and device keys must load successfully before "
             "retrying; check homeserver reachability and session sync. "
             "MEDRE never auto-verifies devices or falls back to plaintext."
         )
     return (
-        f"verification_policy='strict' refused the encrypted send to Matrix "
+        "Matrix encrypted send blocked for "
         f"room {_display_identifier(violation.room_id)}: "
-        f"{describe_peer_device_trust_violation(violation)}. Verify the "
-        "listed devices in MEDRE's own nio device store before retrying. "
-        "Verification performed in another Matrix client does not automatically "
-        "mark MEDRE's local devices trusted; MEDRE does not currently provide "
-        "an operator peer-verification workflow. Use permissive mode when "
-        "that local trust cannot be established. MEDRE never auto-verifies "
-        "devices or falls back to plaintext. A retry remains blocked until "
-        "the local trust view is complete and verified."
+        f"{describe_peer_device_trust_violation(violation)}. Local nio "
+        "device-store trust must be established before retrying. Verification "
+        "in a different Matrix client does not populate this bridge's local "
+        "trust store; MEDRE does not currently offer an operator peer-verification "
+        "workflow. MEDRE never auto-verifies devices or falls back to plaintext. "
+        "Retries remain blocked until local trust is complete and verified."
     )
