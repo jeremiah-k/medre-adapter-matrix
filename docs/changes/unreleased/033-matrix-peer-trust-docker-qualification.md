@@ -7,8 +7,7 @@ gate. The first strict delivery on a fresh session prepares room membership
 and is refused with the unverified peer device named; verifying the device
 in MEDRE's own nio store lets strict deliver and the peer client decrypts
 the payload; a trust reset refuses the next send; local trust survives an
-adapter restart on the same store; the permissive default delivers despite
-trust gaps while recording the warnings counter.
+adapter restart on the same store; the default delivers without a peer-device trust scan or trust-gap warning.
 
 The scenario runs under the `docker` tier (deselected by default) and needs
 `mindroom-nio[e2e]`. Each adapter instance owns its own Matrix account so

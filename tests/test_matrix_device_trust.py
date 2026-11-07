@@ -1,4 +1,4 @@
-"""Peer-device verification policy: strict refusal and permissive diagnostics.
+"""Peer-device verification policy: opt-in strict refusal and quiet default.
 
 Covers the ``verification_policy`` configuration binding at the encrypted-send
 authorization point: mixed verified/unverified device sets, trust refresh
@@ -28,7 +28,6 @@ from medre.adapters.matrix.device_trust import (
     PeerRecipient,
     evaluate_peer_device_trust,
     format_peer_device_trust_refusal,
-    format_peer_device_trust_warning,
 )
 from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix import MatrixConfig
@@ -217,7 +216,7 @@ class TestEvaluatePeerDeviceTrust:
 
 
 class TestTrustMessageFormatting:
-    """Refusal and warning strings identify room, devices, and remedy."""
+    """Opt-in refusal messages identify room, devices, and remedy."""
 
     def test_refusal_names_room_devices_and_remedy(self) -> None:
         report = PeerDeviceTrustReport(
@@ -233,12 +232,13 @@ class TestTrustMessageFormatting:
         violation = evaluate_peer_device_trust(report)
         assert violation is not None
         message = format_peer_device_trust_refusal(violation)
-        assert "verification_policy='strict'" in message
+        assert "verification_policy" not in message
+        assert "strict" not in message and "permissive" not in message
         assert ROOM in message
         assert f"{CAROL}/CAROLDEV (trust state: unset)" in message
         assert f"no known device list: {ALICE}" in message
-        assert "Verify the listed devices" in message
-        assert "MEDRE's own nio device store" in message
+        assert "Local nio device-store trust must be established" in message
+        assert "does not currently offer an operator peer-verification" in message
         assert "never auto-verifies" in message
         assert "falls back to plaintext" in message
 
@@ -251,23 +251,6 @@ class TestTrustMessageFormatting:
         message = format_peer_device_trust_refusal(violation)
         assert "trust view is unavailable" in message
 
-    def test_warning_states_permissive_delivery(self) -> None:
-        report = PeerDeviceTrustReport(
-            room_id=ROOM,
-            recipients=(
-                PeerRecipient(
-                    user_id=CAROL,
-                    devices=(_pd(CAROL, "CAROLDEV", False, "unset"),),
-                ),
-            ),
-        )
-        violation = evaluate_peer_device_trust(report)
-        assert violation is not None
-        message = format_peer_device_trust_warning(violation)
-        assert ROOM in message
-        assert f"{CAROL}/CAROLDEV" in message
-        assert "verification_policy='permissive'" in message
-        assert "delivery proceeds" in message
 
 
 # ===================================================================
@@ -348,7 +331,7 @@ class TestStrictVerificationRefusal:
         # delivery complete; the delivery itself never reached the SDK.
         assert exc_info.value.transient is True
         message = str(exc_info.value)
-        assert "verification_policy='strict'" in message
+        assert "verification_policy" not in message
         assert f"{CAROL}/CAROLDEV (trust state: unset)" in message
         assert "never auto-verifies" in message
         assert client.room_send.await_count == 0
@@ -460,82 +443,56 @@ class TestStrictVerificationRefusal:
 
         diagnostics = adapter.diagnostics()
         assert diagnostics["peer_device_trust_strict_refusals"] == 1
-        assert diagnostics["peer_device_trust_warnings"] == 0
+        assert "peer_device_trust_warnings" not in diagnostics
         assert diagnostics["verification_policy"] == "strict"
 
 
 # ===================================================================
-# Permissive mode (default): delivery proceeds with loud diagnostics
+# Default mode: encrypted delivery remains quiet, with no trust scan
 # ===================================================================
 
 
-class TestPermissiveDiagnostics:
-    """The default mode keeps delivery behavior and makes trust gaps loud."""
+class TestDefaultEncryptedDelivery:
+    """The default mode neither scans peer devices nor logs trust gaps."""
 
-    async def test_mixed_devices_deliver_with_warning_and_counter(
-        self, caplog: pytest.LogCaptureFixture
+    @pytest.mark.parametrize("scenario", ["unverified", "verified", "unknown"])
+    async def test_default_delivers_without_peer_trust_scan(
+        self,
+        scenario: str,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         config = _make_config()
         adapter = MatrixAdapter(config)
         adapter.ctx = _make_ctx()
-        client = _stub_client(_mixed_room_users(), _mixed_device_view())
+        if scenario == "unknown":
+            users = {ALICE: {}, DAVE: {}}
+            devices = {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}}
+        elif scenario == "verified":
+            users = _mixed_room_users()
+            devices = {
+                ALICE: {"ALICEDEV": _FakeDevice(True, "verified")},
+                CAROL: {"CAROLDEV": _FakeDevice(True, "verified")},
+            }
+        else:
+            users = _mixed_room_users()
+            devices = _mixed_device_view()
+        client = _stub_client(users, devices)
         _wire_encrypted_session(adapter, client, config)
+        report = AsyncMock(side_effect=AssertionError("default must not query peer trust"))
+        monkeypatch.setattr(MatrixSession, "peer_device_trust_report", report)
 
         with caplog.at_level(logging.WARNING, logger="test.matrix-device-trust"):
             delivery = await adapter.deliver(_make_result())
 
-        assert client.room_send.await_count == 1
         assert delivery.native_message_id == "$evt-trust-ok"
-        messages = " ".join(record.getMessage() for record in caplog.records)
-        assert ROOM in messages
-        assert f"{CAROL}/CAROLDEV" in messages
-        assert "verification_policy='permissive'" in messages
-
-        diagnostics = adapter.diagnostics()
-        assert diagnostics["peer_device_trust_warnings"] == 1
-        assert diagnostics["peer_device_trust_strict_refusals"] == 0
-        assert diagnostics["verification_policy"] == "permissive"
-
-    async def test_verified_devices_deliver_without_warning(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        config = _make_config()
-        adapter = MatrixAdapter(config)
-        adapter.ctx = _make_ctx()
-        client = _stub_client(
-            _mixed_room_users(),
-            {
-                ALICE: {"ALICEDEV": _FakeDevice(True, "verified")},
-                CAROL: {"CAROLDEV": _FakeDevice(True, "verified")},
-            },
-        )
-        _wire_encrypted_session(adapter, client, config)
-
-        with caplog.at_level(logging.WARNING, logger="test.matrix-device-trust"):
-            await adapter.deliver(_make_result())
-
         assert client.room_send.await_count == 1
+        assert client.room_send.await_args.kwargs["ignore_unverified_devices"] is True
+        report.assert_not_awaited()
         assert not caplog.records
-        assert adapter.diagnostics()["peer_device_trust_warnings"] == 0
-
-    async def test_unknown_recipient_warns_but_delivers(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        config = _make_config()
-        adapter = MatrixAdapter(config)
-        adapter.ctx = _make_ctx()
-        client = _stub_client(
-            {ALICE: {}, DAVE: {}},
-            {ALICE: {"ALICEDEV": _FakeDevice(True, "verified")}},
-        )
-        _wire_encrypted_session(adapter, client, config)
-
-        with caplog.at_level(logging.WARNING, logger="test.matrix-device-trust"):
-            await adapter.deliver(_make_result())
-
-        assert client.room_send.await_count == 1
-        messages = " ".join(record.getMessage() for record in caplog.records)
-        assert f"no known device list: {DAVE}" in messages
+        diagnostics = adapter.diagnostics()
+        assert "peer_device_trust_warnings" not in diagnostics
+        assert diagnostics["peer_device_trust_strict_refusals"] == 0
 
 
 # ===================================================================
@@ -560,7 +517,7 @@ class TestPolicyScope:
         assert client.room_send.await_count == 1
         assert delivery.native_message_id == "$evt-trust-ok"
         assert adapter.diagnostics()["peer_device_trust_strict_refusals"] == 0
-        assert adapter.diagnostics()["peer_device_trust_warnings"] == 0
+        assert "peer_device_trust_warnings" not in adapter.diagnostics()
 
     async def test_inactive_crypto_stays_outside_trust_policy(self) -> None:
         """Without crypto the existing encrypted-room safeguard classifies, not trust."""
@@ -750,23 +707,23 @@ async def test_nio_new_unverified_device_blocks_after_preflight() -> None:
     assert adapter.diagnostics()["peer_device_trust_strict_refusals"] == 1
 
 
-async def test_permissive_warnings_coalesce_without_losing_counts(
-    caplog: pytest.LogCaptureFixture,
+async def test_default_multiple_encrypted_sends_require_no_trust_scan(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _make_config()
     adapter = MatrixAdapter(config)
     adapter.ctx = _make_ctx()
     client = _stub_client(_mixed_room_users(), _mixed_device_view())
     _wire_encrypted_session(adapter, client, config)
+    report = AsyncMock(side_effect=AssertionError("unexpected peer trust query"))
+    monkeypatch.setattr(MatrixSession, "peer_device_trust_report", report)
     with caplog.at_level(logging.WARNING, logger="test.matrix-device-trust"):
         for _ in range(4):
             await adapter.deliver(_make_result())
     assert client.room_send.await_count == 4
-    assert adapter.diagnostics()["peer_device_trust_warnings"] == 4
-    assert (
-        len([r for r in caplog.records if "peer-device trust gaps" in r.getMessage()])
-        == 1
-    )
+    report.assert_not_awaited()
+    assert not caplog.records
+    assert "peer_device_trust_warnings" not in adapter.diagnostics()
 
 
 async def test_fresh_strict_send_fetches_members_and_keys_before_authorization() -> (
@@ -988,9 +945,6 @@ def test_trust_diagnostics_escape_native_identifier_controls() -> None:
     )
     violation = evaluate_peer_device_trust(report)
     assert violation is not None
-    for message in [
-        format_peer_device_trust_refusal(violation),
-        format_peer_device_trust_warning(violation),
-    ]:
+    for message in [format_peer_device_trust_refusal(violation)]:
         assert "\n" not in message and "\x1b" not in message
         assert r"\n" in message and r"\x1b" in message

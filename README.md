@@ -304,28 +304,29 @@ replaces account identity material and can require verification in other clients
 
 ## Peer-device verification policy
 
-`verification_policy` governs encrypted sends to peer devices and has two
-states. `permissive` (the default) keeps today's delivery behavior: an
-encrypted send proceeds even when recipient devices are unverified or
-unknown. Each such delivery increments the `peer_device_trust_warnings`
-diagnostic counter, while a rate-limited warning names the room, devices,
-and their trust state. `strict` refuses encrypted sends when the local nio
-device store does not affirmatively trust every known peer device, when the
-room's membership snapshot is incomplete, or when the device view cannot be
-read. It also passes `ignore_unverified_devices=False` to nio's own
-group-session preparation, which may discover devices after MEDRE's preflight.
-This is a local device-store policy: verifying a peer in another Matrix client
-does not automatically establish MEDRE's device trust. MEDRE exposes no
-operator peer-verification workflow today; operators who cannot maintain
-local trust should continue using `permissive`. No automatic verification or
-plaintext downgrade occurs. An SDK trust refusal is repairable before handoff
-but is not evidence of successful delivery.
+`verification_policy` is an optional peer-device **send authorization** gate.
+The `permissive` default sends encrypted messages without scanning the local
+peer-device trust store or emitting trust-gap warnings. This is normal bridge
+operation for trusted rooms, not a trust verdict or a delivery receipt.
+Own-device cross-signing is handled independently during identity setup and
+runtime verification and does not establish trust in other users' devices.
+
+Operators may explicitly select `strict`: then encrypted sends require an
+affirmative local nio trust view for every recipient device, complete room
+membership, and SDK enforcement with `ignore_unverified_devices=False`.
+Unknown/unverified peers cause a retryable, pre-handoff refusal. MEDRE does
+not currently offer an operator peer-verification workflow, and verification
+performed in a different Matrix client does not automatically populate
+MEDRE's local device store. Do not enable `strict` unless local peer trust
+can be established independently. No automatic verification or plaintext
+downgrade occurs.
 
 The policy applies only to encrypted sends — crypto active and the room
 affirmatively encrypted. Plaintext delivery, ephemeral typing, and redactions
-are outside its scope. A recipient the adapter's device store cannot see at
-all counts as a trust gap in both modes; the adapter's own device is an
-own-device cross-signing concern, not peer-device trust.
+are outside its scope. For the opt-in gate, a recipient missing from the
+local device store counts as a trust gap. The default does not inspect that
+store. The adapter's own current device is handled by cross-signing, not
+peer-device authorization.
 
 Pre-release decision note: `permissive` is the default for compatibility, and
 `strict` is NOT scheduled to become the default until a separate,

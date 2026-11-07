@@ -87,8 +87,8 @@ class MatrixConfig:
         or ``"e2ee_optional"``.
     verification_policy:
         Peer-device trust policy for encrypted sends.  ``"permissive"``
-        (default) delivers to unverified or unknown peer devices but logs
-        a warning and counts every delivery with such trust gaps.
+        (default) preserves normal encrypted delivery without querying
+        peer trust or logging routine trust-gap warnings.
         ``"strict"`` refuses the send at the encrypted-send authorization
         point with a retryable, actionable error naming the offending
         devices and the verification remedy.  The adapter never
