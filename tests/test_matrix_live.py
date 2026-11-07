@@ -1090,6 +1090,7 @@ class TestMatrixLiveSmoke:
                 "inbound_suppressed_envelope",
                 "inbound_filtered_allowlist",
                 "inbound_suppressed_startup",
+                "inbound_suppressed_stale",
             )
             for field in required_fields:
                 assert field in diag, (
@@ -1118,6 +1119,7 @@ class TestMatrixLiveSmoke:
             assert isinstance(diag["inbound_suppressed_envelope"], int)
             assert isinstance(diag["inbound_filtered_allowlist"], int)
             assert isinstance(diag["inbound_suppressed_startup"], int)
+            assert isinstance(diag["inbound_suppressed_stale"], int)
 
             # -- No secrets in diagnostics output --------------------------------
             diag_str = str(diag)
