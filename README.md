@@ -120,6 +120,16 @@ Restart replays unacknowledged records through native-ID deduplication. History
 provenance and recovery losses remain explicit; neither a saved cursor nor a
 connected client establishes successful delivery.
 
+Inbound events whose origin server timestamp predates the adapter's start by
+more than `startup_backlog_suppress_seconds` (default 60 seconds, `0` disables)
+are startup history and are suppressed on every delivery path — live sync,
+durable catch-up, or gap recovery — using the same transport-neutral
+`should_suppress_startup_backlog` policy the Meshtastic adapter applies. The
+check precedes decode, so messages, reactions, and edits are equally covered,
+and suppressed events count under `inbound_suppressed_stale` in diagnostics.
+The window covers homeserver federation lag and minor clock drift so events
+sent moments before startup still flow.
+
 ## Ownership and imports
 
 This distribution owns Matrix's transport implementation, configuration models,

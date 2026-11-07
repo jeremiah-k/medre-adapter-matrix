@@ -16,6 +16,7 @@ import hashlib
 import logging
 import random
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from medre.adapters.matrix.codec import MatrixCodec
@@ -65,6 +66,9 @@ from medre.core.contracts.adapter import (
 from medre.core.contracts.delivery import AdapterHandoffResult
 from medre.core.events.attachments import ATTACHMENT_PAYLOAD_KEY
 from medre.core.events.kinds import EventKind
+from medre.core.policies.startup_backlog_suppress import (
+    should_suppress_startup_backlog,
+)
 from medre.core.ingress import (
     DurableIngressDeferredError,
     AttachmentTransferPermitTimeoutError,
@@ -276,6 +280,7 @@ class MatrixAdapter(AdapterContract):
         "_envelope_handler",
         "_started",
         "_starting",
+        "_adapter_start_epoch",
         "ctx",
         # Delivery retry / rate-limit stats
         "_transient_delivery_failures",
@@ -293,6 +298,7 @@ class MatrixAdapter(AdapterContract):
         "_inbound_filtered_allowlist",
         "_inbound_filtered_encryption_policy",
         "_inbound_suppressed_startup",
+        "_inbound_suppressed_stale",
         # Attachment transfer diagnostics
         "_inbound_attachment_retained",
         "_inbound_attachment_unavailable",
@@ -326,6 +332,7 @@ class MatrixAdapter(AdapterContract):
         self._envelope_handler = MatrixMetadataEnvelope
         self._started: bool = False
         self._starting: bool = False
+        self._adapter_start_epoch: float | None = None
         self.ctx: AdapterContext | None = None
         # Delivery retry / server-directed cooldown stats
         self._transient_delivery_failures: int = 0
@@ -343,6 +350,7 @@ class MatrixAdapter(AdapterContract):
         self._inbound_filtered_allowlist: int = 0
         self._inbound_filtered_encryption_policy: int = 0
         self._inbound_suppressed_startup: int = 0
+        self._inbound_suppressed_stale: int = 0
         # Attachment transfer diagnostics
         self._inbound_attachment_retained: int = 0
         self._inbound_attachment_unavailable: int = 0
@@ -409,6 +417,7 @@ class MatrixAdapter(AdapterContract):
         self._inbound_filtered_allowlist = 0
         self._inbound_filtered_encryption_policy = 0
         self._inbound_suppressed_startup = 0
+        self._inbound_suppressed_stale = 0
         # Attachment transfer diagnostics — reset on start
         self._inbound_attachment_retained = 0
         self._inbound_attachment_unavailable = 0
@@ -453,6 +462,10 @@ class MatrixAdapter(AdapterContract):
         self._session = session
         self._started = False
         self._starting = True
+        # Startup history baseline: captured immediately before the first
+        # sync so events that predate this process are distinguishable
+        # from live traffic on every delivery path.
+        self._adapter_start_epoch = time.time()
         try:
             await session.start()
             self._check_startup_lifetime(session, health_epoch)
@@ -491,6 +504,7 @@ class MatrixAdapter(AdapterContract):
                         self._session = None
                         self._started = False
                         self._start_time = None
+                        self._adapter_start_epoch = None
                         self.ctx = None
             raise
         finally:
@@ -566,6 +580,7 @@ class MatrixAdapter(AdapterContract):
         self._starting = False
         self._started = False
         self._start_time = None
+        self._adapter_start_epoch = None
         session, ctx = self._session, self.ctx
 
         if session is not None:
@@ -1415,6 +1430,43 @@ class MatrixAdapter(AdapterContract):
 
     # -- Inbound callback ---------------------------------------------------
 
+    def _is_startup_history(self, event: dict[str, Any]) -> bool:
+        """Return True when the event predates this adapter's start.
+
+        The start baseline is captured immediately before the first sync.
+        Inbound events whose origin server timestamp predates the baseline
+        by more than ``startup_backlog_suppress_seconds`` happened before
+        the bridge was running and never forward, whichever path delivered
+        them — live sync, durable catch-up, or gap recovery — and the check
+        precedes decode so every event kind (messages, reactions, edits)
+        is covered. The decision reuses the transport-neutral
+        ``should_suppress_startup_backlog`` policy shared with the
+        Meshtastic adapter. Events without a usable timestamp return False
+        before the policy is consulted; future-dated events are treated as
+        clock skew, not history, by the policy itself.
+        """
+        if self._config.startup_backlog_suppress_seconds <= 0:
+            return False
+        start_epoch = self._adapter_start_epoch
+        if start_epoch is None:
+            return False
+        timestamp = event.get("server_timestamp")
+        if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+            return False
+        if timestamp <= 0:
+            return False
+        try:
+            event_time = datetime.fromtimestamp(timestamp / 1000.0, tz=timezone.utc)
+            adapter_start = datetime.fromtimestamp(start_epoch, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            # Unrepresentable timestamps must not poison a durable checkpoint.
+            return False
+        return should_suppress_startup_backlog(
+            event_time,
+            adapter_start,
+            float(self._config.startup_backlog_suppress_seconds),
+        )
+
     async def _on_room_message(
         self,
         event: dict[str, Any],
@@ -1498,6 +1550,24 @@ class MatrixAdapter(AdapterContract):
                     self.adapter_id,
                 )
                 return
+
+        # Startup history watermark: an event whose origin server
+        # timestamp predates this adapter's start is history regardless of
+        # which path delivered it — live sync, durable catch-up, or gap
+        # recovery. Reactions, edits, and messages are all covered because
+        # the check precedes decode and applies to every event kind. This
+        # is a plain return, never a raise, so the SDK consumes the event
+        # and the durable sync checkpoint keeps advancing.
+        if self._is_startup_history(event):
+            self._inbound_suppressed_stale += 1
+            self.ctx.logger.debug(
+                "MatrixAdapter %s: suppressing pre-startup event from %s "
+                "(server_timestamp=%s)",
+                self.adapter_id,
+                sender,
+                event.get("server_timestamp"),
+            )
+            return
 
         # Startup history suppression: before the first successful sync,
         # inbound timeline events are considered backlog / history and are
@@ -1924,6 +1994,7 @@ class MatrixAdapter(AdapterContract):
                     self._inbound_filtered_encryption_policy
                 ),
                 "inbound_suppressed_startup": self._inbound_suppressed_startup,
+                "inbound_suppressed_stale": self._inbound_suppressed_stale,
                 # Attachment transfer diagnostics
                 "inbound_attachment_retained": self._inbound_attachment_retained,
                 "inbound_attachment_unavailable": (
@@ -2013,6 +2084,7 @@ class MatrixAdapter(AdapterContract):
                 self._inbound_filtered_encryption_policy
             ),
             "inbound_suppressed_startup": self._inbound_suppressed_startup,
+            "inbound_suppressed_stale": self._inbound_suppressed_stale,
             # Attachment transfer diagnostics
             "inbound_attachment_retained": self._inbound_attachment_retained,
             "inbound_attachment_unavailable": self._inbound_attachment_unavailable,

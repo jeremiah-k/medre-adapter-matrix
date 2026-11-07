@@ -32,6 +32,23 @@ contract does not establish exactly-once native delivery. SDK recovery loss
 records MUST persist as application evidence before acknowledgement. Ephemeral
 typing MUST remain outside this durable record path.
 
+## Startup history classification
+
+Each active adapter lifetime MUST capture a wall-clock baseline before starting
+its first sync. Events with a usable origin server timestamp strictly earlier
+than that baseline minus `startup_backlog_suppress_seconds` MUST be suppressed
+before decode on live, durable catch-up, and recovery paths. The default window
+is 60 seconds; zero disables this age classification. Values MUST be finite,
+nonnegative numbers, excluding booleans.
+
+An event exactly at the cutoff, within the tolerance window, or future-dated
+MUST NOT be classified as history by this policy. Missing, non-finite, or
+unrepresentable timestamps MUST decline age classification without raising.
+Other ingress, encryption, and startup-live gates remain independently applied.
+Suppression increments `inbound_suppressed_stale`; it is an intentional filter,
+not failed durable admission, so the SDK batch MAY continue to acknowledgement.
+Stop and failed startup MUST retire the baseline before another lifetime begins.
+
 ## Store adoption
 
 Before first adoption, the provider MUST seed the ordinary SDK store's sync token

@@ -6,6 +6,8 @@ Moved from test_matrix_adapter.py to keep that file under 1500 lines.
 from __future__ import annotations
 
 import logging
+import time
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,6 +15,7 @@ from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix_errors import MatrixConfigError
 from medre_matrix_tests.helpers.matrix_adapter import (
     make_adapter_context as _make_adapter_context,
 )
@@ -517,3 +520,208 @@ class TestStartLifecycleCleanup:
             with pytest.raises(MatrixConnectionError):
                 await adapter.start(ctx)
         assert adapter._start_time is None
+
+
+def _stamped(event: Any, ts_ms: int) -> Any:
+    """Attach an origin_server_ts to a fake event's source dict."""
+    event.source["origin_server_ts"] = ts_ms
+    return event
+
+
+class TestStartupHistoryWatermark:
+    """Events predating the adapter's start never forward on any path."""
+
+    def _live_adapter(self) -> tuple[MatrixAdapter, list[Any]]:
+        config = _make_matrix_config()
+        adapter = MatrixAdapter(config)
+        published, ctx = _make_adapter_context()
+        adapter.ctx = ctx
+        adapter._started = True
+        session = MagicMock(name="session")
+        session.is_live = True
+        adapter._session = session
+        return adapter, published
+
+    @staticmethod
+    def _set_baseline(adapter: MatrixAdapter, wall_ms: int) -> None:
+        adapter._adapter_start_epoch = wall_ms / 1000.0
+
+    async def test_pre_startup_reaction_suppressed_while_live(self) -> None:
+        """A reaction sent before startup is history even after sync is live."""
+        adapter, published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _stamped(_make_fake_reaction_event(), baseline - 600_000)
+        await adapter._on_room_message(_to_event_dict(_make_fake_room(), event))
+        assert published == []
+        assert adapter._inbound_suppressed_stale == 1
+        assert adapter._inbound_suppressed_startup == 0
+
+    async def test_pre_startup_text_suppressed_while_live(self) -> None:
+        """A message sent ten minutes before startup is suppressed."""
+        adapter, published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _stamped(_make_fake_nio_event(), baseline - 600_000)
+        await adapter._on_room_message(_to_event_dict(_make_fake_room(), event))
+        assert published == []
+        assert adapter._inbound_suppressed_stale == 1
+
+    async def test_pre_startup_event_with_provenance_not_admitted(self) -> None:
+        """Gap-recovery deliveries predating startup never reach admission."""
+        adapter, published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        admit = AsyncMock(name="admit_inbound")
+        adapter.admit_inbound = admit  # type: ignore[method-assign]
+        event = _stamped(_make_fake_nio_event(), baseline - 600_000)
+        await adapter._on_room_message(
+            _to_event_dict(_make_fake_room(), event), provenance="durable_sync"
+        )
+        admit.assert_not_awaited()
+        assert published == []
+        assert adapter._inbound_suppressed_stale == 1
+
+    async def test_skew_within_tolerance_published(self) -> None:
+        """An event sent moments before startup still flows."""
+        adapter, published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _stamped(_make_fake_nio_event(), baseline - 30_000)
+        await adapter._on_room_message(_to_event_dict(_make_fake_room(), event))
+        assert len(published) == 1
+        assert adapter._inbound_suppressed_stale == 0
+
+    async def test_post_startup_event_published(self) -> None:
+        """An event sent after the baseline flows normally."""
+        adapter, published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _stamped(_make_fake_nio_event(), baseline + 1_000)
+        await adapter._on_room_message(_to_event_dict(_make_fake_room(), event))
+        assert len(published) == 1
+        assert adapter._inbound_suppressed_stale == 0
+
+    async def test_missing_timestamp_not_classified_as_history(self) -> None:
+        """Events without a usable timestamp bypass the watermark rule."""
+        adapter, _published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _to_event_dict(_make_fake_room(), _make_fake_nio_event())
+        del event["server_timestamp"]
+        assert adapter._is_startup_history(event) is False
+
+    async def test_unset_baseline_not_classified_as_history(self) -> None:
+        """Before start() captures a baseline the rule is inert."""
+        adapter, _published = self._live_adapter()
+        event = _to_event_dict(_make_fake_room(), _make_fake_nio_event())
+        assert adapter._is_startup_history(event) is False
+
+    async def test_disabled_window_admits_pre_startup_event(self) -> None:
+        """``startup_backlog_suppress_seconds=0`` disables the rule."""
+        config = _make_matrix_config(startup_backlog_suppress_seconds=0)
+        adapter = MatrixAdapter(config)
+        published, ctx = _make_adapter_context()
+        adapter.ctx = ctx
+        adapter._started = True
+        session = MagicMock(name="session")
+        session.is_live = True
+        adapter._session = session
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _stamped(_make_fake_nio_event(), baseline - 600_000)
+        await adapter._on_room_message(_to_event_dict(_make_fake_room(), event))
+        assert len(published) == 1
+        assert adapter._inbound_suppressed_stale == 0
+
+    async def test_future_timestamp_never_suppressed(self) -> None:
+        """Future-dated events are skew, not history."""
+        adapter, _published = self._live_adapter()
+        baseline = int(time.time() * 1000)
+        self._set_baseline(adapter, baseline)
+        event = _to_event_dict(_make_fake_room(), _make_fake_nio_event())
+        event["server_timestamp"] = baseline + 3_600_000
+        assert adapter._is_startup_history(event) is False
+
+    @pytest.mark.parametrize(
+        "timestamp",
+        [253402300800000, 10**1000, float("nan"), float("inf"), float("-inf")],
+    )
+    async def test_unrepresentable_timestamp_does_not_block_durable_admission(
+        self, timestamp: int | float
+    ) -> None:
+        """Untrusted origin timestamps cannot poison a durable checkpoint."""
+        adapter, _published = self._live_adapter()
+        self._set_baseline(adapter, int(time.time() * 1000))
+        event = _to_event_dict(_make_fake_room(), _make_fake_nio_event())
+        event["server_timestamp"] = timestamp
+        assert adapter._is_startup_history(event) is False
+        admitted = AsyncMock(return_value=MagicMock(created=True))
+        adapter.admit_inbound = admitted  # type: ignore[method-assign]
+        await adapter._on_room_message(event, provenance="durable_sync")
+        admitted.assert_awaited_once()
+        assert adapter._inbound_suppressed_stale == 0
+
+    async def test_disabled_window_skips_timestamp_conversion(self) -> None:
+        """A disabled watermark never attempts conversion of bad source times."""
+        adapter = MatrixAdapter(_make_matrix_config(startup_backlog_suppress_seconds=0))
+        self._set_baseline(adapter, int(time.time() * 1000))
+        with patch("medre.adapters.matrix.adapter.datetime") as mock_dt:
+            assert adapter._is_startup_history({"server_timestamp": 10**1000}) is False
+            mock_dt.fromtimestamp.assert_not_called()
+
+    async def test_stop_retires_startup_baseline(self) -> None:
+        """A stopped adapter never classifies late callbacks as startup history."""
+        adapter, _published = self._live_adapter()
+        self._set_baseline(adapter, int(time.time() * 1000))
+        adapter._session.stop = AsyncMock()
+        adapter._session.last_sync_error = None
+        await adapter.stop()
+        assert adapter._adapter_start_epoch is None
+        assert adapter._is_startup_history({"server_timestamp": 1}) is False
+
+    async def test_failed_start_clears_startup_baseline(self) -> None:
+        """A failed session startup leaves no watermark for later callbacks."""
+        adapter = MatrixAdapter(_make_matrix_config())
+        _published, ctx = _make_adapter_context()
+        mock_session = MagicMock(name="session")
+        mock_session.start = AsyncMock(side_effect=RuntimeError("startup failed"))
+        mock_session.stop = AsyncMock()
+        with (
+            patch("medre.adapters.matrix.adapter.HAS_NIO", True),
+            patch(
+                "medre.adapters.matrix.adapter.MatrixSession",
+                return_value=mock_session,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="startup failed"):
+                await adapter.start(ctx)
+        assert adapter._adapter_start_epoch is None
+
+    async def test_diagnostics_include_stale_counter(self) -> None:
+        """diagnostics() dict includes inbound_suppressed_stale."""
+        adapter, _published = self._live_adapter()
+        adapter._inbound_suppressed_stale = 4
+        assert adapter.diagnostics()["inbound_suppressed_stale"] == 4
+
+
+@pytest.mark.parametrize(
+    "window", [True, -1, float("nan"), float("inf"), None, "60", 10**1000]
+)
+def test_startup_history_window_rejects_invalid_values_with_typed_error(window):
+    config = _make_matrix_config(startup_backlog_suppress_seconds=window)
+    with pytest.raises(MatrixConfigError, match="startup_backlog_suppress_seconds"):
+        config.validate()
+
+
+@pytest.mark.parametrize(
+    "offset_ms,expected", [(-60_001, True), (-60_000, False), (-59_999, False)]
+)
+def test_startup_history_cutoff_is_strict(offset_ms, expected):
+    adapter = MatrixAdapter(_make_matrix_config())
+    baseline_ms = 1_800_000_000_000
+    adapter._adapter_start_epoch = baseline_ms / 1000
+    assert (
+        adapter._is_startup_history({"server_timestamp": baseline_ms + offset_ms})
+        is expected
+    )

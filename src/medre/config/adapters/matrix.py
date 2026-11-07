@@ -77,6 +77,12 @@ class MatrixConfig:
         Maximum seconds without durable Classic Sync progress before the
         current sync loop is recycled. ``0`` disables active stale-sync
         recovery.
+    startup_backlog_suppress_seconds:
+        Seconds of tolerance before the adapter start baseline: inbound
+        events whose origin server timestamp predates the baseline by more
+        than this window are startup history and never forward, whichever
+        path delivered them. The window covers homeserver federation lag
+        and minor clock drift. ``0`` disables the suppression.
     megolm_key_request_rate_limit_per_minute:
         Maximum missing-room-key to-device request attempts admitted in a
         rolling minute, including retries.
@@ -116,6 +122,7 @@ class MatrixConfig:
     sync_timeout_ms: int = 30000
     initial_sync_timeout_seconds: float = 45.0
     sync_stale_timeout_seconds: float = 300.0
+    startup_backlog_suppress_seconds: float = 60.0
     megolm_key_request_rate_limit_per_minute: int = 30
     megolm_key_request_max_inflight: int = 4
     encryption_mode: str = "plaintext"
@@ -296,6 +303,22 @@ class MatrixConfig:
         ):
             raise MatrixConfigError(
                 "initial_sync_timeout_seconds must be finite and >= 0"
+            )
+
+        history_window = self.startup_backlog_suppress_seconds
+        valid_history_window = False
+        if not isinstance(history_window, bool) and isinstance(
+            history_window, (int, float)
+        ):
+            try:
+                valid_history_window = (
+                    math.isfinite(history_window) and history_window >= 0
+                )
+            except OverflowError:
+                pass  # An integer outside float range is not a usable window.
+        if not valid_history_window:
+            raise MatrixConfigError(
+                "startup_backlog_suppress_seconds must be finite and >= 0"
             )
 
         if isinstance(self.sync_stale_timeout_seconds, bool) or not isinstance(
