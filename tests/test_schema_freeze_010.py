@@ -39,7 +39,13 @@ def test_frozen_matrix_schema_is_valid(name: str) -> None:
     """Verify syntax and references of the schema we actually ship."""
     from jsonschema import Draft202012Validator
 
-    Draft202012Validator.check_schema(json.loads((SCHEMA_DIR / name).read_text()))
+    schema = json.loads((SCHEMA_DIR / name).read_text())
+    Draft202012Validator.check_schema(schema)
+    if "$id" in schema:
+        assert schema["$id"] == (
+            "https://raw.githubusercontent.com/jeremiah-k/"
+            f"medre-adapter-matrix/main/docs/schemas/{name}"
+        )
 
 
 def test_relay_provenance_schema_rejects_unauthorized_fields() -> None:

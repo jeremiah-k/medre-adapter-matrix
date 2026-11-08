@@ -3,8 +3,8 @@
   "release": "0.1.0",
   "schema_files_sha256": {
     "matrix-durable-checkpoint.schema.json": "9c8615f88fc66f159e2ba584886686951bfa90d032bf378558b3e4b19770c8cd",
-    "matrix-embedded-metadata.schema.json": "7d489c5e57ca26eee0b29c6daff5edc8f424f560086722d62fb6d77a2c1a9a12",
-    "matrix-native-metadata.schema.json": "79f71c9ee0542a113f6b3e2df3146ee3443b291d0d9c4e85981e1c0fce055164",
+    "matrix-embedded-metadata.schema.json": "342ec2511f92a7d551b83e88548a66229bdd711bb4c701cb3c2809e8a384da57",
+    "matrix-native-metadata.schema.json": "b40f8506235f59e2cceb785bcbd80b0b84ac185242e2409cc2ca5c28659d7e21",
     "matrix-oauth-credentials.schema.json": "af5d1b42a1824ad547d31e2f62e1b9015dfdc21abd52deb0ccdcdc94c1e96601"
   }
 }

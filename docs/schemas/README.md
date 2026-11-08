@@ -1,5 +1,15 @@
 # Matrix adapter schema contracts
 
+Source distributions include this directory. Wheels include the same schema
+bundle, freeze manifest, and examples under `medre/adapters/matrix/_schemas`.
+Installed consumers can read it with
+`importlib.resources.files("medre.adapters.matrix").joinpath("_schemas")`.
+
+Declared `$id` values use this repository's `raw.githubusercontent.com` schema
+namespace, matching core's identifier ownership policy. The earlier `medre.dev`
+identifiers are replaced before the first tag; editor mappings should use the
+included schemas' `$id` values. Identifiers do not require network retrieval.
+
 ## 0.1.0 release schema freeze
 
 `v0.1.0.freeze.json` records the SHA-256 of every exported top-level JSON,
