@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://medre.dev/schemas/matrix-native-metadata.schema.json",
+  "$id": "https://raw.githubusercontent.com/jeremiah-k/medre-adapter-matrix/main/docs/schemas/matrix-native-metadata.schema.json",
   "title": "MEDRE Matrix Native Metadata",
   "description": "Versioned Matrix-native metadata stored in CanonicalEvent.metadata.native.data.",
   "type": "object",

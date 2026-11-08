@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://medre.dev/schemas/matrix-embedded-metadata.schema.json",
+  "$id": "https://raw.githubusercontent.com/jeremiah-k/medre-adapter-matrix/main/docs/schemas/matrix-embedded-metadata.schema.json",
   "title": "MEDRE Matrix embedded provenance",
   "type": "object",
   "required": ["envelope"],
