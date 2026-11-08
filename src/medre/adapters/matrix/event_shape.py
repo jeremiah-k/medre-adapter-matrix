@@ -199,39 +199,77 @@ def attachment_candidate_from_matrix_media(
 
 
 def matrix_relay_metadata(content: dict[str, Any]) -> dict[str, object] | None:
-    """Return the safe MEDRE relay envelope embedded in Matrix content."""
-    envelope = MatrixMetadataEnvelope.from_content(content)
-    if envelope is None:
+    """Project only validated, actually supplied MEDRE provenance hints.
+
+    These fields came from Matrix wire content, so they are **untrusted**:
+    never use them as relation-binding, identity, or mutation authority. Keep
+    the full safe v1 origin context for cross-bridge observation, but do not
+    invent empty source fields when a producer sends the minimal envelope.
+    """
+    parsed = MatrixMetadataEnvelope.from_content(content)
+    if parsed is None:
         return None
-    string_fields = (
-        envelope.canonical_event_id,
-        envelope.source_adapter,
-        envelope.source_channel,
-        envelope.provenance,
-        envelope.relation_info,
-        envelope.lineage_pointer,
-        envelope.metadata_mode,
-        envelope.native_source_summary,
-    )
-    if not all(isinstance(value, str) for value in string_fields):
+    medre = content.get("medre")
+    raw = medre.get("envelope") if isinstance(medre, dict) else None
+    if not isinstance(raw, dict):
         return None
-    result: dict[str, object] = {
-        "medre_envelope": {
-            "schema_version": envelope.schema_version,
-            "canonical_event_id": envelope.canonical_event_id,
-            "source_adapter": envelope.source_adapter,
-            "source_channel": envelope.source_channel,
-            "provenance": envelope.provenance,
-            "relation_info": envelope.relation_info,
-            "lineage_pointer": envelope.lineage_pointer,
-            "metadata_mode": envelope.metadata_mode,
-            "native_source_summary": envelope.native_source_summary,
-        }
+    mode = raw.get("metadata_mode", "safe")
+    if mode not in ("minimal", "safe", "full") or not isinstance(
+        raw.get("canonical_event_id"), str
+    ):
+        return None
+
+    projected: dict[str, object] = {
+        "schema_version": parsed.schema_version,
+        "canonical_event_id": raw["canonical_event_id"],
+        "metadata_mode": mode,
     }
+    for name in (
+        "source_transport_id",
+        "source_adapter",
+        "source_channel",
+        "provenance",
+        "relation_info",
+        "lineage_pointer",
+        "native_source_summary",
+        "event_kind",
+    ):
+        if name in raw:
+            if not isinstance(raw[name], str):
+                return None
+            projected[name] = raw[name]
+    for name in ("trace_id", "root_event_id", "conversation_id"):
+        if name in raw:
+            if raw[name] is not None and not isinstance(raw[name], str):
+                return None
+            projected[name] = raw[name]
+    if "source_native_ref" in raw:
+        source_ref = raw["source_native_ref"]
+        if source_ref is not None:
+            if not isinstance(source_ref, dict) or set(source_ref) != {
+                "adapter",
+                "native_channel_id",
+                "native_message_id",
+                "native_thread_id",
+            }:
+                return None
+            if not isinstance(source_ref["adapter"], str) or not isinstance(
+                source_ref["native_message_id"], str
+            ):
+                return None
+            if any(
+                source_ref[key] is not None and not isinstance(source_ref[key], str)
+                for key in ("native_channel_id", "native_thread_id")
+            ):
+                return None
+            projected["source_native_ref"] = dict(source_ref)
+        else:
+            projected["source_native_ref"] = None
+
+    result: dict[str, object] = {"medre_envelope": projected}
     from medre.adapters.matrix.bridge_context import normalize_bridge_context
 
-    embedded = content.get("medre")
-    metadata = embedded.get("metadata") if isinstance(embedded, dict) else None
+    metadata = medre.get("metadata") if isinstance(medre, dict) else None
     context = (
         normalize_bridge_context(metadata.get("bridge_context"))
         if isinstance(metadata, dict)
