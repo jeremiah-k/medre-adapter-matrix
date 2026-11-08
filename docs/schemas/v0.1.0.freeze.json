@@ -4,7 +4,7 @@
   "schema_files_sha256": {
     "matrix-durable-checkpoint.schema.json": "9c8615f88fc66f159e2ba584886686951bfa90d032bf378558b3e4b19770c8cd",
     "matrix-embedded-metadata.schema.json": "7d489c5e57ca26eee0b29c6daff5edc8f424f560086722d62fb6d77a2c1a9a12",
-    "matrix-native-metadata.schema.json": "6daef88cc16dae255151edd89f74153b13d1a27c9cd660a0c4a874d6b7cf9256",
+    "matrix-native-metadata.schema.json": "79f71c9ee0542a113f6b3e2df3146ee3443b291d0d9c4e85981e1c0fce055164",
     "matrix-oauth-credentials.schema.json": "af5d1b42a1824ad547d31e2f62e1b9015dfdc21abd52deb0ccdcdc94c1e96601"
   }
 }

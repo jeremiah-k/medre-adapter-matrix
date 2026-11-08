@@ -784,3 +784,100 @@ def test_matrix_origin_timestamp_falls_back_to_unsigned_age_ts() -> None:
     event = codec.decode(native)
 
     assert _matrix_data(event)["origin_server_ts_ms"] == 1_700_000_000_456
+
+
+def test_matrix_relay_provenance_survives_ingress_without_becoming_authority() -> None:
+    """Keep the typed v1 origin hints the renderer emits, including the native ref.
+
+    The decoded event still has its own new Matrix source identity; embedded
+    provenance is untrusted observation metadata, never binding authority.
+    """
+    origin = {
+        "schema_version": 1,
+        "canonical_event_id": "source-event",
+        "source_transport_id": "!00ab",
+        "metadata_mode": "safe",
+        "source_adapter": "mmrelay.meshtastic",
+        "source_channel": "LocalMesh",
+        "provenance": "meshtastic",
+        "relation_info": "reply",
+        "lineage_pointer": "root",
+        "native_source_summary": "Radio Alice",
+        "event_kind": "message.created",
+        "trace_id": "trace-1",
+        "root_event_id": "root",
+        "conversation_id": "conversation-1",
+        "source_native_ref": {
+            "adapter": "mmrelay.meshtastic",
+            "native_channel_id": "LocalMesh",
+            "native_message_id": "0",
+            "native_thread_id": None,
+        },
+    }
+    event = MatrixCodec("matrix-1", _config()).decode(
+        _event(
+            content={
+                "msgtype": "m.text",
+                "body": "hello",
+                "medre": {"envelope": origin},
+            }
+        )
+    )
+    native = event.metadata.native.data
+    assert native["matrix"]["relay"]["medre_envelope"] == origin
+    assert event.source_native_ref.native_message_id == "$event:example.com"
+    Draft202012Validator(_native_schema()).validate(dict(native))
+
+
+def test_minimal_matrix_relay_projection_does_not_fabricate_origin_fields() -> None:
+    """Absent provenance is unknown, not the empty string."""
+    minimal = {
+        "schema_version": 1,
+        "canonical_event_id": "source-event",
+        "source_transport_id": "!00ab",
+        "metadata_mode": "minimal",
+    }
+    event = MatrixCodec("matrix-1", _config()).decode(
+        _event(
+            content={
+                "msgtype": "m.text",
+                "body": "hello",
+                "medre": {"envelope": minimal},
+            }
+        )
+    )
+    native = event.metadata.native.data
+    assert native["matrix"]["relay"]["medre_envelope"] == minimal
+    Draft202012Validator(_native_schema()).validate(dict(native))
+
+
+@pytest.mark.parametrize(
+    "invalid_field,invalid_value",
+    [
+        ("source_transport_id", ["not", "scalar"]),
+        ("trace_id", {"unexpected": True}),
+        ("metadata_mode", "unrecognized"),
+        ("source_native_ref", {"adapter": "mesh", "native_message_id": 0}),
+    ],
+)
+def test_malformed_wire_provenance_is_discarded_without_dropping_message(
+    invalid_field, invalid_value
+) -> None:
+    """Malformed untrusted relay hints must not contaminate canonical facts."""
+    origin = {
+        "schema_version": 1,
+        "canonical_event_id": "source",
+        "metadata_mode": "safe",
+    }
+    origin[invalid_field] = invalid_value
+    event = MatrixCodec("matrix-1", _config()).decode(
+        _event(
+            content={
+                "msgtype": "m.text",
+                "body": "safe body",
+                "medre": {"envelope": origin},
+            }
+        )
+    )
+    assert event.payload["body"] == "safe body"
+    assert "relay" not in _matrix_data(event)

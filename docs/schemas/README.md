@@ -12,3 +12,14 @@ examples or runtime data. After the first tag, changes must follow the
 versioning policy (including independent adapter-native and SQLite versions),
 with contract tests and a documented compatibility decision; never silently
 replace a released freeze manifest.
+
+## Frozen relay provenance projection
+
+The Matrix wire `medre.envelope` is an **untrusted routing hint**, not proof
+of authorship, delivery, or authorization to mutate another message. The
+versioned `matrix.relay.medre_envelope` projection preserves validated v1
+identity, event kind, optional native source reference, and trace/conversation
+pointers when present. In `minimal` mode it keeps only fields actually sent;
+missing provenance is never filled in with invented empty strings. Unknown
+fields are omitted, and malformed known fields cause the relay hint to be
+discarded while the Matrix message is still decoded.

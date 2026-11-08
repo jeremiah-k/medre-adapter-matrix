@@ -181,21 +181,10 @@
         "medre_envelope": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "schema_version",
-            "canonical_event_id",
-            "source_adapter",
-            "source_channel",
-            "provenance",
-            "relation_info",
-            "lineage_pointer",
-            "metadata_mode",
-            "native_source_summary"
-          ],
+          "required": ["schema_version", "canonical_event_id", "metadata_mode"],
           "properties": {
             "schema_version": {
-              "type": "integer",
-              "minimum": 1
+              "const": 1
             },
             "canonical_event_id": {
               "type": "string"
@@ -216,16 +205,53 @@
               "type": "string"
             },
             "metadata_mode": {
-              "type": "string"
+              "enum": ["minimal", "safe", "full"]
             },
             "native_source_summary": {
               "type": "string"
+            },
+            "source_transport_id": {
+              "type": "string"
+            },
+            "event_kind": {
+              "type": "string"
+            },
+            "trace_id": {
+              "type": ["string", "null"]
+            },
+            "root_event_id": {
+              "type": ["string", "null"]
+            },
+            "conversation_id": {
+              "type": ["string", "null"]
+            },
+            "source_native_ref": {
+              "oneOf": [
+                { "type": "null" },
+                { "$ref": "#/$defs/OriginNativeRef" }
+              ]
             }
           }
         },
         "bridge_context": {
           "$ref": "#/$defs/BridgeContext"
         }
+      }
+    },
+    "OriginNativeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "native_channel_id",
+        "native_message_id",
+        "native_thread_id"
+      ],
+      "properties": {
+        "adapter": { "type": "string" },
+        "native_channel_id": { "type": ["string", "null"] },
+        "native_message_id": { "type": "string" },
+        "native_thread_id": { "type": ["string", "null"] }
       }
     },
     "Interop": {

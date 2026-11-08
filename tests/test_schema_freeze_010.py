@@ -27,3 +27,50 @@ def test_first_release_schema_file_set_is_frozen() -> None:
 def test_first_release_schema_content_is_frozen(name: str, sha256: str) -> None:
     """Changing a public schema requires an explicit supported-version decision."""
     assert hashlib.sha256((SCHEMA_DIR / name).read_bytes()).hexdigest() == sha256
+
+
+@pytest.mark.parametrize(
+    "name",
+    sorted(
+        name for name in FROZEN["schema_files_sha256"] if name.endswith(".schema.json")
+    ),
+)
+def test_frozen_matrix_schema_is_valid(name: str) -> None:
+    """Verify syntax and references of the schema we actually ship."""
+    from jsonschema import Draft202012Validator
+
+    Draft202012Validator.check_schema(json.loads((SCHEMA_DIR / name).read_text()))
+
+
+def test_relay_provenance_schema_rejects_unauthorized_fields() -> None:
+    """The native relay hint is strict even though Matrix wire content is not."""
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads((SCHEMA_DIR / "matrix-native-metadata.schema.json").read_text())
+    example = json.loads(
+        (SCHEMA_DIR / "examples" / "matrix-native-metadata-example.json").read_text()
+    )
+    validator = Draft202012Validator(schema)
+    validator.validate(example)
+    from copy import deepcopy
+
+    unknown = deepcopy(example)
+    unknown["matrix"]["relay"] = {
+        "medre_envelope": {
+            "schema_version": 1,
+            "canonical_event_id": "evt",
+            "metadata_mode": "safe",
+            "access_token": "must-not-be-projected",
+        }
+    }
+    assert not validator.is_valid(unknown)
+    minimal = deepcopy(example)
+    minimal["matrix"]["relay"] = {
+        "medre_envelope": {
+            "schema_version": 1,
+            "canonical_event_id": "evt",
+            "metadata_mode": "minimal",
+            "source_transport_id": "!a1b2",
+        }
+    }
+    assert validator.is_valid(minimal)
