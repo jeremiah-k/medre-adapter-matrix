@@ -80,3 +80,11 @@ def test_relay_provenance_schema_rejects_unauthorized_fields() -> None:
         }
     }
     assert validator.is_valid(minimal)
+
+
+def test_frozen_schema_bytes_are_checkout_invariant() -> None:
+    """Git must not rewrite frozen schema bytes on Windows (autocrlf)."""
+    attributes = (Path(__file__).resolve().parents[1] / ".gitattributes").read_text(
+        encoding="utf-8"
+    )
+    assert "docs/schemas/** -text" in attributes.splitlines()
