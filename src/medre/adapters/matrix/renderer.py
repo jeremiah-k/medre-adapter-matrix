@@ -384,6 +384,13 @@ class MatrixRenderer:
         RenderingResult
             The rendered Matrix content dict wrapped in a result.
         """
+        reaction = _find_relation(event.relations, "reaction")
+        if (
+            reaction is not None
+            and not self._get_mmrelay_compat(event)
+            and (not isinstance(reaction.key, str) or not reaction.key.strip())
+        ):
+            raise ValueError("Canonical reaction requires an explicit nonempty key")
         target_adapter = ctx.target_adapter
         target_channel = ctx.target_channel
         delivery_strategy = ctx.delivery_strategy
@@ -849,7 +856,11 @@ class MatrixRenderer:
             content.pop("body", None)
             content.pop("format", None)
             content.pop("formatted_body", None)
-            symbol = self._extract_reaction_symbol(rel, event)
+            symbol = (
+                self._extract_reaction_symbol(rel, event)
+                if self._get_mmrelay_compat(event)
+                else rel.key
+            )
             content["m.relates_to"] = {
                 "rel_type": "m.annotation",
                 "event_id": mx_event_id,
@@ -859,7 +870,11 @@ class MatrixRenderer:
             return {}, "m.reaction"
         else:
             # mmrelay_compat or missing Matrix-native target → m.emote fallback
-            symbol = self._extract_reaction_symbol(rel, event)
+            symbol = (
+                self._extract_reaction_symbol(rel, event)
+                if self._get_mmrelay_compat(event)
+                else rel.key
+            )
             original_text = self._abbreviate_text(
                 self._extract_original_text(rel, event)
             )
