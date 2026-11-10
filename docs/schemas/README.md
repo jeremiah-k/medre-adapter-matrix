@@ -56,3 +56,10 @@ release branch. An untrusted wire claim, even a structurally valid MEDRE
 
 The Matrix renderer's older explicitly enabled wire-compatibility code is not
 part of this native metadata contract; it must not be enabled by 1.5 relays.
+
+## Git checkout line endings
+
+A main-to-candidate Git checkout may retain unchanged CRLF files. Packaging
+MUST emit the exact frozen bytes. LF reconstruction is permitted only when
+its digest matches the freeze manifest; every other byte change MUST fail
+the build. Fresh checkouts retain the explicit `-text` attribute policy.
