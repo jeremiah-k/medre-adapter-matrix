@@ -88,3 +88,24 @@ def test_frozen_schema_bytes_are_checkout_invariant() -> None:
         encoding="utf-8"
     )
     assert "docs/schemas/** -text" in attributes.splitlines()
+
+
+def test_first_release_matrix_native_contract_excludes_legacy_mmrelay() -> None:
+    """Do not permanently standardize one relay's prerelease flat wire keys."""
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (SCHEMA_DIR / "matrix-native-metadata.schema.json").read_text(encoding="utf-8")
+    )
+    example = json.loads(
+        (SCHEMA_DIR / "examples" / "matrix-native-metadata-example.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validator = Draft202012Validator(schema)
+    validator.validate(example)
+    contaminated = dict(example)
+    contaminated["interop"] = {"mmrelay": {"meshtastic_text": "override"}}
+    assert not validator.is_valid(contaminated)
+    assert set(schema["properties"]) == {"matrix"}
+    assert not any("meshtastic_" in key for key in schema["$defs"])

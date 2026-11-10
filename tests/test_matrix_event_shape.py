@@ -17,13 +17,11 @@ from medre.adapters.matrix.event_shape import (
     MEDIA_MSGTYPES,
     matrix_media_descriptor,
     matrix_namespace,
-    mmrelay_interop_fields,
 )
 from medre.adapters.matrix.metadata import MATRIX_METADATA_ENVELOPE_SCHEMA_VERSION
 from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events.canonical import CanonicalEvent
 from medre.core.events.kinds import EventKind
-from medre.interop.mmrelay import KEY_ID, KEY_LONGNAME
 from medre_matrix_tests.helpers.matrix import (
     make_nio_event,
     make_nio_room,
@@ -486,7 +484,7 @@ def test_matrix_crypto_provenance_is_bounded_to_safe_facts() -> None:
     assert "sensitive-session-id" not in rendered
 
 
-def test_matrix_relay_and_mmrelay_metadata_use_separate_namespaces() -> None:
+def test_matrix_relay_ignores_legacy_flat_transport_metadata() -> None:
     codec = MatrixCodec("matrix-1", _config())
     content = {
         "msgtype": "m.text",
@@ -500,8 +498,8 @@ def test_matrix_relay_and_mmrelay_metadata_use_separate_namespaces() -> None:
                 "provenance": "relay",
             }
         },
-        KEY_ID: "packet-7",
-        KEY_LONGNAME: "Field Node",
+        "meshtastic_id": "packet-7",
+        "meshtastic_longname": "Field Node",
     }
 
     event = codec.decode(_event(content=content))
@@ -510,29 +508,19 @@ def test_matrix_relay_and_mmrelay_metadata_use_separate_namespaces() -> None:
     envelope = native["matrix"]["relay"]["medre_envelope"]
     assert envelope["canonical_event_id"] == "evt-origin"
     assert envelope["source_adapter"] == "mesh-1"
-    assert native["interop"]["mmrelay"] == {
-        KEY_ID: "packet-7",
-        KEY_LONGNAME: "Field Node",
-    }
-    assert KEY_ID not in native["matrix"]
+    assert set(native) == {"matrix"}
+    assert event.payload["body"] == "relayed"
+    assert "meshtastic_id" not in native["matrix"]
 
 
 def test_matrix_media_descriptor_returns_none_for_text() -> None:
     assert matrix_media_descriptor({"msgtype": "m.text", "body": "hello"}) is None
 
 
-def test_interop_fields_accept_frozen_mappings() -> None:
-    """mmrelay_interop_fields reads deep-frozen (MappingProxy) namespaces."""
+def test_matrix_namespace_accepts_frozen_mappings() -> None:
+    """Native adapter metadata is deeply frozen without legacy interop fields."""
     from types import MappingProxyType
 
-    native = MappingProxyType(
-        {
-            "interop": MappingProxyType(
-                {"mmrelay": MappingProxyType({"meshtastic_id": "7"})}
-            )
-        }
-    )
-    assert mmrelay_interop_fields(native).get("meshtastic_id") == "7"
     assert (
         matrix_namespace(
             {"matrix": MappingProxyType({"schema_version": 1, "sender": "@a:b"})}
@@ -633,22 +621,21 @@ def test_direct_normalized_event_derives_safe_crypto_and_unsigned_transaction() 
     assert matrix["encryption"]["verified"] is True
 
 
-def test_matrix_native_projection_drops_non_scalar_mmrelay_values() -> None:
+def test_matrix_native_projection_never_exports_flat_meshtastic_keys() -> None:
     codec = MatrixCodec("matrix-1", _config())
     native = _event(
         content={
             "msgtype": "m.text",
             "body": "hello",
-            KEY_ID: {"unexpected": "object"},
-            KEY_LONGNAME: "Field Node",
+            "meshtastic_id": {"unexpected": "object"},
+            "meshtastic_longname": "Field Node",
         }
     )
 
     event = codec.decode(native)
 
-    assert event.metadata.native.data["interop"]["mmrelay"] == {
-        KEY_LONGNAME: "Field Node"
-    }
+    assert set(event.metadata.native.data) == {"matrix"}
+    assert event.payload["body"] == "hello"
 
 
 def test_matrix_native_projection_drops_malformed_relay_envelope() -> None:
@@ -683,7 +670,7 @@ def test_matrix_codec_native_output_conforms_to_standalone_schema() -> None:
             "event_id": "$thread-root",
             "m.in_reply_to": {"event_id": "$latest"},
         },
-        KEY_ID: 1234,
+        "meshtastic_id": 1234,
     }
     event = codec.decode(_event(content=content, room_encrypted=True))
     schema = _native_schema()
@@ -692,18 +679,13 @@ def test_matrix_codec_native_output_conforms_to_standalone_schema() -> None:
     Draft202012Validator(schema).validate(event.metadata.native.data)
 
 
-def test_mmrelay_schema_properties_match_runtime_key_set() -> None:
-    """MMRelay schema property names track the runtime ``_MMRELAY_KEYS``.
-
-    Drift between the runtime key set and the schema properties is
-    caught here so any future addition to one without the other fails
-    loudly.
-    """
-    from medre.adapters.matrix.codec import _MMRELAY_KEYS
-
+def test_native_schema_has_no_relay_specific_interop_contract() -> None:
+    """The MEDRE 0.1 native projection must not freeze MMRelay flat fields."""
     schema = _native_schema()
-    props = set(schema["$defs"]["MMRelay"]["properties"])
-    assert props == set(_MMRELAY_KEYS)
+    assert set(schema["properties"]) == {"matrix"}
+    assert "Interop" not in schema["$defs"]
+    assert "MMRelay" not in schema["$defs"]
+    assert not any("meshtastic_" in key for key in schema["$defs"])
 
 
 def test_matrix_origin_timestamp_accepts_numeric_string() -> None:
@@ -881,3 +863,101 @@ def test_malformed_wire_provenance_is_discarded_without_dropping_message(
     )
     assert event.payload["body"] == "safe body"
     assert "relay" not in _matrix_data(event)
+
+
+@pytest.mark.asyncio
+async def test_bounded_bridge_reaction_survives_matrix_without_flat_keys() -> None:
+    """Carry generic peer hints without treating them as trusted Matrix relations."""
+    from medre.adapters.matrix.renderer import MatrixRenderer
+    from medre.core.events import EventMetadata, EventRelation, NativeRef
+    from medre.core.rendering.renderer import RenderingContext
+    from medre_matrix_tests.helpers.matrix import matrix_payload_content
+
+    ref = NativeRef("radio-east", "LongFast", "0")
+    source = CanonicalEvent(
+        event_id="origin-reaction",
+        event_kind="message.reacted",
+        schema_version=1,
+        timestamp=datetime.now(UTC),
+        source_adapter="radio-east",
+        source_transport_id="!0000007b",
+        source_channel_id="LongFast",
+        parent_event_id=None,
+        lineage=(),
+        relations=(
+            EventRelation(
+                relation_type="reaction",
+                target_event_id=None,
+                target_native_ref=ref,
+                key="🔥",
+                fallback_text="previous message",
+            ),
+        ),
+        payload={"body": "reacted 🔥", "msgtype": "m.emote"},
+        metadata=EventMetadata(),
+        source_native_ref=ref,
+    )
+    rendered = await MatrixRenderer().render(
+        source,
+        RenderingContext(
+            target_adapter="matrix-1",
+            target_platform="matrix",
+            target_channel="!room:example.com",
+            delivery_strategy="direct",
+        ),
+    )
+    content = matrix_payload_content(rendered)
+    assert not any(key.startswith("meshtastic_") for key in content)
+    context = content["medre"]["metadata"]["bridge_context"]
+    assert context["source"]["native_ref"]["native_message_id"] == "0"
+    assert context["relations"][0]["key"] == "🔥"
+    assert context["relations"][0]["target_native_ref"]["native_message_id"] == "0"
+
+    # Plain Matrix clients still see authored text. Untrusted embedded
+    # provenance never confers a native reaction target or authorship.
+    content["body"] = "authored visible text"
+    incoming = MatrixCodec("matrix-1", _config()).decode(_event(content=content))
+    assert incoming.payload["body"] == "authored visible text"
+    assert incoming.event_kind == "message.created"
+    assert incoming.relations == ()
+    assert incoming.source_transport_id == "@alice:example.com"
+    assert incoming.source_native_ref is not None
+    assert incoming.source_native_ref.native_message_id == "$event:example.com"
+    assert set(incoming.metadata.native.data) == {"matrix"}
+    import msgspec
+
+    assert (
+        msgspec.json.decode(
+            msgspec.json.encode(
+                incoming.metadata.native.data["matrix"]["relay"]["bridge_context"]
+            )
+        )
+        == context
+    )
+
+
+@pytest.mark.parametrize("msgtype", ["m.text", "m.emote"])
+@pytest.mark.parametrize("reply_id", [0, "0", "!abc123"])
+@pytest.mark.parametrize("reaction_key", [None, "🔥"])
+def test_flat_relay_fields_cannot_classify_reactions_or_replace_authored_body(
+    msgtype: str, reply_id: int | str, reaction_key: str | None
+) -> None:
+    content = {
+        "msgtype": msgtype,
+        "body": "visible authored body",
+        "meshtastic_id": "packet-42",
+        "meshtastic_meshnet": "remote-mesh",
+        "meshtastic_portnum": "TEXT_MESSAGE_APP",
+        "meshtastic_text": "hidden replacement",
+        "meshtastic_replyId": reply_id,
+        "meshtastic_emoji": 1,
+        "meshtastic_longname": "Asserted sender",
+        "meshtastic_reaction_key": reaction_key,
+    }
+    event = MatrixCodec("matrix-1", _config()).decode(_event(content=content))
+
+    assert event.event_kind == "message.created"
+    assert event.payload["body"] == "visible authored body"
+    assert event.payload["msgtype"] == msgtype
+    assert event.relations == ()
+    assert set(event.metadata.native.data) == {"matrix"}

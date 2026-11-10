@@ -1058,8 +1058,8 @@ class TestDisplayNameNormalization:
         ndata = published[0].metadata.native.data
         assert ndata["matrix"]["sender_display_name"] == "@alice:example.com"
 
-    async def test_mmrelay_longname_preserved(self) -> None:
-        """Existing MMRelay longname/shortname are not overwritten."""
+    async def test_flat_transport_names_do_not_override_matrix_sender(self) -> None:
+        """The Matrix codec ignores untrusted flat transport-specific names."""
         config = _make_matrix_config(user_id="@bot:example.com")
         adapter = MatrixAdapter(config)
         published, ctx = _make_adapter_context()
@@ -1080,9 +1080,7 @@ class TestDisplayNameNormalization:
         )
         assert len(published) == 1
         ndata = published[0].metadata.native.data
-        # MMRelay names should be preserved, not overwritten by Matrix name
-        assert ndata["interop"]["mmrelay"]["meshtastic_longname"] == "NodeLong"
-        assert ndata["interop"]["mmrelay"]["meshtastic_shortname"] == "NSh"
+        assert set(ndata) == {"matrix"}
         # sender_display_name is normalized from the Matrix display name
         assert ndata["matrix"]["sender_display_name"] == "Alice Display"
 
@@ -1138,10 +1136,10 @@ class TestDisplayNameNormalization:
         ndata = published[0].metadata.native.data
         assert ndata["matrix"]["sender_display_name"] == "From User Name Fn"
 
-    async def test_existing_mmrelay_longname_preserved_with_object_users(
+    async def test_flat_transport_names_ignored_with_object_users(
         self,
     ) -> None:
-        """Existing MMRelay meshtastic_longname is preserved (object users)."""
+        """Object-user enrichment also ignores flat transport-specific names."""
         config = _make_matrix_config(user_id="@bot:example.com")
         adapter = MatrixAdapter(config)
         published, ctx = _make_adapter_context()
@@ -1162,9 +1160,8 @@ class TestDisplayNameNormalization:
         )
         assert len(published) == 1
         ndata = published[0].metadata.native.data
-        assert ndata["interop"]["mmrelay"]["meshtastic_longname"] == "NodeLong"
-        assert ndata["interop"]["mmrelay"]["meshtastic_shortname"] == "NSh"
-        # sender_display_name is normalized alongside preserved mmrelay wire fields
+        assert set(ndata) == {"matrix"}
+        # Matrix sender identity comes from the SDK room, not untrusted wire keys
         assert ndata["matrix"]["sender_display_name"] == "Tad Chilly"
 
     # --- FIX 2: frozen metadata immutability after enrichment -----------

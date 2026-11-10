@@ -35,32 +35,9 @@ from medre.core.contracts.adapter import AdapterCodec
 from medre.core.events.canonical import CanonicalEvent, EventRelation, NativeRef
 from medre.core.events.kinds import EventKind
 from medre.core.events.metadata import EventMetadata, NativeMetadata, TransportMetadata
-from medre.interop.mmrelay import (
-    EMOJI_FLAG_VALUE,
-    KEY_EMOJI,
-    KEY_ID,
-    KEY_LONGNAME,
-    KEY_MESHNET,
-    KEY_PORTNUM,
-    KEY_REACTION_KEY,
-    KEY_REPLY_ID,
-    KEY_SHORTNAME,
-    KEY_TEXT,
-)
 
 _MEDIA_MSGTYPES = frozenset(MEDIA_MSGTYPES)
 _MAX_ORIGIN_SERVER_TS_MS = 253_402_300_799_999  # 9999-12-31T23:59:59.999Z
-_MMRELAY_KEYS = (
-    KEY_ID,
-    KEY_REPLY_ID,
-    KEY_TEXT,
-    KEY_EMOJI,
-    KEY_MESHNET,
-    KEY_PORTNUM,
-    KEY_LONGNAME,
-    KEY_SHORTNAME,
-    KEY_REACTION_KEY,
-)
 
 
 @dataclass(frozen=True)
@@ -83,18 +60,6 @@ class _NormalizedMatrixEvent:
     verified: bool | None
 
 
-def _mmrelay_interop_metadata(content: dict[str, Any]) -> dict[str, object] | None:
-    """Return scalar MMRelay wire fields present in Matrix content, if any."""
-    values: dict[str, object] = {}
-    for key in _MMRELAY_KEYS:
-        if key not in content:
-            continue
-        value = content[key]
-        if value is None or isinstance(value, (str, int, float, bool)):
-            values[key] = value
-    return values or None
-
-
 class MatrixCodec(AdapterCodec):
     """Decode Matrix events into MEDRE canonical events."""
 
@@ -107,8 +72,8 @@ class MatrixCodec(AdapterCodec):
 
         The canonical envelope carries only transport-neutral identity and
         relation semantics.  The full stable Matrix projection is stored under
-        ``metadata.native.data["matrix"]``; MMRelay compatibility fields, when
-        present, are isolated under ``metadata.native.data["interop"]["mmrelay"]``.
+        ``metadata.native.data["matrix"]``. Flat Meshtastic fields are not
+        part of the MEDRE 0.1.0 canonical or Matrix-native schema.
         """
         normalized = self._normalized_fields(native_event, room_id)
         source = normalized.source
@@ -142,36 +107,20 @@ class MatrixCodec(AdapterCodec):
         if relation is not None and relation.kind in {"reply", "thread"}:
             body = strip_reply_fallback_body(body)
 
-        # MMRelay encodes Meshtastic reactions as m.emote plus compatibility
-        # fields rather than a Matrix m.annotation relation.
-        mmrelay_relation = self._mmrelay_reaction(content, effective_msgtype, body)
-        relations: tuple[EventRelation, ...]
-        if relation is None and mmrelay_relation is not None:
-            event_kind = EventKind.MESSAGE_REACTED
-            relations = (mmrelay_relation,)
-            payload: dict[str, object] = {
-                "body": body,
-                "msgtype": effective_msgtype,
-            }
-            if (
-                mmrelay_relation.key
-                and "meshtastic_reaction_key" in mmrelay_relation.metadata
-            ):
-                payload["key"] = mmrelay_relation.key
-        else:
-            event_kind = self._event_kind(
-                event_type=event_type,
-                msgtype=effective_msgtype,
-                relation=relation,
-            )
-            relations = self._canonical_relations(relation, room_id)
-            payload = self._payload(
-                event_kind=event_kind,
-                body=body,
-                msgtype=effective_msgtype,
-                content=content,
-                relation=relation,
-            )
+        # Only Matrix-native relations authorize relation classification. Wire
+        # content from other transports is untrusted; flat relay-specific
+        # fields do not create canonical reactions, replies, or body overrides.
+        event_kind = self._event_kind(
+            event_type=event_type, msgtype=effective_msgtype, relation=relation
+        )
+        relations = self._canonical_relations(relation, room_id)
+        payload = self._payload(
+            event_kind=event_kind,
+            body=body,
+            msgtype=effective_msgtype,
+            content=content,
+            relation=relation,
+        )
 
         if event_kind in {EventKind.MESSAGE_CREATED, EventKind.MESSAGE_EDITED}:
             styled = from_html(
@@ -211,7 +160,6 @@ class MatrixCodec(AdapterCodec):
             event_encrypted=event_encrypted,
             decrypted=decrypted,
             verified=verified,
-            mmrelay_interop=_mmrelay_interop_metadata(effective_content),
         )
 
         return CanonicalEvent(
@@ -367,40 +315,6 @@ class MatrixCodec(AdapterCodec):
             ),
             key=key,
             fallback_text=None,
-        )
-
-    def _mmrelay_reaction(
-        self,
-        content: dict[str, Any],
-        msgtype: str,
-        body: str,
-    ) -> EventRelation | None:
-        reply_id = content.get(KEY_REPLY_ID)
-        emoji_flag = content.get(KEY_EMOJI)
-        if (
-            msgtype != "m.emote"
-            or reply_id in (None, "")
-            or emoji_flag != EMOJI_FLAG_VALUE
-        ):
-            return None
-
-        raw_key = content.get(KEY_REACTION_KEY)
-        key = str(raw_key).strip() if raw_key is not None else ""
-        if not key:
-            key = body
-        metadata: dict[str, object] = {
-            "meshtastic_reply_id": str(reply_id),
-            "meshtastic_emoji": emoji_flag,
-        }
-        if raw_key is not None and str(raw_key).strip():
-            metadata["meshtastic_reaction_key"] = str(raw_key).strip()
-        return EventRelation(
-            relation_type="reaction",
-            target_event_id=None,
-            target_native_ref=None,
-            key=key,
-            fallback_text=None,
-            metadata=metadata,
         )
 
     @staticmethod
