@@ -109,3 +109,38 @@ def test_first_release_matrix_native_contract_excludes_legacy_mmrelay() -> None:
     assert not validator.is_valid(contaminated)
     assert set(schema["properties"]) == {"matrix"}
     assert not any("meshtastic_" in key for key in schema["$defs"])
+
+
+def test_matrix_embedded_context_accepts_only_bounded_source_native_facts() -> None:
+    """Matrix's frozen bridge-context copy matches the generic safe projection."""
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (SCHEMA_DIR / "matrix-embedded-metadata.schema.json").read_text()
+    )
+    context = {
+        "schema_version": 1,
+        "source": {
+            "adapter": "meshtastic",
+            "canonical_event_id": "id",
+            "channel": "0",
+            "sender_id": "!123",
+            "native_ref": None,
+            "native_facts": {
+                "namespace": "meshtastic",
+                "fields": {"portnum": 1, "meshnet_label": "Local"},
+            },
+        },
+        "relations": [],
+    }
+    # Extract the definition with its referenced definitions; the root schema
+    # requires an envelope and would reject a bare bridge context even with $ref.
+    context_schema = {
+        "$schema": schema["$schema"],
+        "$ref": "#/$defs/BridgeContext",
+        "$defs": schema["$defs"],
+    }
+    validator = Draft202012Validator(context_schema)
+    validator.validate(context)
+    context["source"]["native_facts"]["fields"]["private_key"] = {"secret": True}
+    assert not validator.is_valid(context)
