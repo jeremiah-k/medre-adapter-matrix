@@ -224,8 +224,12 @@
             },
             "source_native_ref": {
               "oneOf": [
-                { "type": "null" },
-                { "$ref": "#/$defs/OriginNativeRef" }
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/OriginNativeRef"
+                }
               ]
             }
           }
@@ -245,10 +249,18 @@
         "native_thread_id"
       ],
       "properties": {
-        "adapter": { "type": "string" },
-        "native_channel_id": { "type": ["string", "null"] },
-        "native_message_id": { "type": "string" },
-        "native_thread_id": { "type": ["string", "null"] }
+        "adapter": {
+          "type": "string"
+        },
+        "native_channel_id": {
+          "type": ["string", "null"]
+        },
+        "native_message_id": {
+          "type": "string"
+        },
+        "native_thread_id": {
+          "type": ["string", "null"]
+        }
       }
     },
     "BridgeContext": {
@@ -329,6 +341,9 @@
               "$ref": "#/$defs/BridgeNativeRef"
             }
           ]
+        },
+        "native_facts": {
+          "$ref": "#/$defs/BridgeNativeFacts"
         }
       }
     },
@@ -394,6 +409,41 @@
         "native_thread_id": {
           "type": ["string", "null"],
           "maxLength": 1024
+        }
+      }
+    },
+    "BridgeNativeFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "fields"],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}(?![\\s\\S])"
+        },
+        "fields": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 12,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,63}(?![\\s\\S])"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string",
+                "maxLength": 256
+              },
+              {
+                "type": "integer",
+                "minimum": -2147483648,
+                "maximum": 2147483647
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
         }
       }
     }

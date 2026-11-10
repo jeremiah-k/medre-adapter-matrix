@@ -20,3 +20,18 @@ The builder and normalizer are provided by `medre.core.rendering.bridge_context`
 The Matrix module retains its existing imports for callers. The v1 wire format
 matches core's bridge-context schema; this move MUST NOT change metadata modes
 or the receiver's native identity and relation authority.
+
+## Public native fact projection
+
+The optional `source.native_facts` object carries one source-owned namespace
+and up to twelve bounded string/integer/boolean facts selected by its adapter.
+The Matrix renderer uses the exact shared core builder; it must not enumerate
+`meshtastic_*` fields or copy opaque native packet maps into Matrix content.
+When rendering supplied source attribution, origin-label precedence MUST be the
+explicit route/context label, then the attribution snapshot label, then the
+configured source label. Only `None` falls through; an explicit empty label
+MUST be preserved at each level.
+
+The source attribution (`sender_name`/`sender_short_name`) is generic and
+separate from native facts such as portnum. All embedded facts remain untrusted
+until an application authorizes the **observed** Matrix sender.

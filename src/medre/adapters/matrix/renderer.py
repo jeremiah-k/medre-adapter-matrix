@@ -265,13 +265,21 @@ class MatrixRenderer:
         origin_label / platform_hint / projection logic.
 
         Origin_label precedence: ``ctx.source_origin_label`` (when not
-        ``None``, including explicit ``""``) > adapter registry > ``None``.
+        ``None``, including explicit ``""``) > attribution snapshot > adapter
+        registry > ``None``.
         """
 
         source_info = self._source_attribution.get(event.source_adapter)
         source_origin_label = (
             getattr(source_info, "origin_label", None) if source_info else None
         )
+        if ctx is not None and ctx.source_attribution is not None:
+            source = ctx.source_attribution
+            if source.source_origin_label is not None:
+                source_origin_label = source.source_origin_label
+            if ctx.source_origin_label is not None:
+                source_origin_label = ctx.source_origin_label
+            return replace(source, source_origin_label=source_origin_label)
         if ctx is not None and ctx.source_origin_label is not None:
             source_origin_label = ctx.source_origin_label
 

@@ -162,3 +162,98 @@ def test_malformed_and_oversized_peer_context_is_ignored():
     assert normalized is not None
     assert "PRIVATE_SENTINEL" not in json.dumps(normalized)
     assert "target_fact" not in json.dumps(normalized)
+
+
+@pytest.mark.parametrize("version", [1, 2, True, None])
+@pytest.mark.parametrize("portnum", [1, 1.0])
+def test_public_facts_survive_json_and_codec_only_from_supported_native_versions(
+    version, portnum
+):
+    from msgspec.structs import replace
+
+    original = replace(
+        event("meshtastic"),
+        metadata=EventMetadata(
+            native=NativeMetadata(
+                data={
+                    "meshtastic": {
+                        "schema_version": version,
+                        "public_facts": {"portnum": portnum, "meshnet_label": "East"},
+                        "packet": {"private_key": "PRIVATE_SENTINEL"},
+                    }
+                }
+            )
+        ),
+    )
+    content = {
+        "msgtype": "m.text",
+        "body": "hello",
+        **build_matrix_metadata_content(original, "safe"),
+    }
+    wire = json.loads(json.dumps(content))
+    decoded = MatrixCodec(
+        "matrix", MatrixConfig(adapter_id="matrix", homeserver="", user_id="")
+    ).decode(
+        {
+            "sender": "@peer:example.com",
+            "event_id": "$received",
+            "source": {"type": "m.room.message", "content": wire},
+        },
+        room_id="!room:example.com",
+    )
+    context = decoded.metadata.native.data["matrix"]["relay"]["bridge_context"]
+    assert (
+        context["relations"][0]["target_native_ref"]["native_message_id"]
+        == "native-target"
+    )
+    if type(version) is int and version == 1:
+        facts = context["source"]["native_facts"]
+        assert facts["namespace"] == "meshtastic"
+        assert dict(facts["fields"]) == {"portnum": 1, "meshnet_label": "East"}
+        assert type(facts["fields"]["portnum"]) is int
+    else:
+        assert "native_facts" not in context["source"]
+    assert "PRIVATE_SENTINEL" not in json.dumps(wire)
+    assert decoded.source_native_ref.native_message_id == "$received"
+    assert decoded.payload["body"] == "hello"
+    assert not decoded.relations
+
+
+@pytest.mark.parametrize("context_label", [None, "", "Route"])
+@pytest.mark.parametrize("snapshot_label", [None, "", "Snapshot"])
+async def test_context_attribution_preserves_registry_origin_fallback(
+    context_label, snapshot_label
+):
+    from medre.adapters.matrix.renderer import MatrixRenderer
+    from medre.core.rendering.attribution import RelayAttribution
+    from medre.core.rendering.renderer import RenderingContext
+
+    renderer = MatrixRenderer(
+        source_attribution={
+            "source-meshtastic": SimpleNamespace(
+                platform="meshtastic", origin_label="Registry"
+            )
+        }
+    )
+    rendered = await renderer.render(
+        event("meshtastic"),
+        RenderingContext(
+            "direct",
+            "matrix",
+            "!room:example.org",
+            "matrix",
+            source_origin_label=context_label,
+            source_attribution=RelayAttribution(
+                source_sender_label="Alice", source_origin_label=snapshot_label
+            ),
+        ),
+    )
+    source = rendered.payload["_matrix_operation"]["content"]["medre"]["metadata"][
+        "bridge_context"
+    ]["source"]
+    expected = (
+        context_label
+        if context_label is not None
+        else snapshot_label if snapshot_label is not None else "Registry"
+    )
+    assert source["origin_label"] == expected
