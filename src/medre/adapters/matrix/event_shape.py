@@ -25,8 +25,6 @@ from medre.core.events.attachments import (
 
 MATRIX_NATIVE_NAMESPACE = "matrix"
 MATRIX_NATIVE_SCHEMA_VERSION = 1
-INTEROP_NAMESPACE = "interop"
-MMRELAY_INTEROP_NAMESPACE = "mmrelay"
 
 MEDIA_MSGTYPES: dict[str, str] = {
     "m.image": "image",
@@ -296,7 +294,6 @@ def build_matrix_native_metadata(
     event_encrypted: bool,
     decrypted: bool,
     verified: bool | None,
-    mmrelay_interop: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the versioned Matrix-native metadata namespace.
 
@@ -326,8 +323,6 @@ def build_matrix_native_metadata(
         relay=matrix_relay_metadata(content),
     )
     native: dict[str, object] = {MATRIX_NATIVE_NAMESPACE: matrix.to_dict()}
-    if mmrelay_interop is not None:
-        native[INTEROP_NAMESPACE] = {MMRELAY_INTEROP_NAMESPACE: dict(mmrelay_interop)}
     return native
 
 
@@ -353,8 +348,8 @@ def mmrelay_interop_fields(native_data: Mapping[str, Any]) -> Mapping[str, Any]:
     Returns an empty mapping when the interop namespace is absent or
     malformed, so callers can treat it as a fallback lookup source.
     """
-    interop = native_data.get(INTEROP_NAMESPACE)
+    interop = native_data.get("interop")
     if not isinstance(interop, Mapping):
         return {}
-    mmrelay = interop.get(MMRELAY_INTEROP_NAMESPACE)
+    mmrelay = interop.get("mmrelay")
     return mmrelay if isinstance(mmrelay, Mapping) else {}

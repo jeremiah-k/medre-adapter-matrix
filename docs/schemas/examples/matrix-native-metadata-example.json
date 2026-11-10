@@ -43,12 +43,5 @@
         "native_source_summary": ""
       }
     }
-  },
-  "interop": {
-    "mmrelay": {
-      "meshtastic_id": "123456",
-      "meshtastic_longname": "Field Node",
-      "meshtastic_shortname": "FN"
-    }
   }
 }
