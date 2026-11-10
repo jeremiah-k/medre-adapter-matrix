@@ -35,3 +35,10 @@ MUST be preserved at each level.
 The source attribution (`sender_name`/`sender_short_name`) is generic and
 separate from native facts such as portnum. All embedded facts remain untrusted
 until an application authorizes the **observed** Matrix sender.
+
+## Explicit reaction keys
+
+Canonical reaction rendering MUST require an explicit nonempty relation key
+even when a reply relation is also present, and preserve that exact key. Message bodies, payload emoji, and presentation
+fallbacks MUST NOT supply a missing key. The explicitly enabled legacy
+presentation mode remains outside this canonical contract.
