@@ -104,7 +104,8 @@ class MatrixCodec(AdapterCodec):
 
         # Matrix reply fallbacks are presentation artifacts, not canonical body.
         # A thread may include m.in_reply_to as fallback context; strip it too.
-        if relation is not None and relation.kind in {"reply", "thread"}:
+        has_reply_fallback = relation is not None and relation.has_reply_fallback
+        if has_reply_fallback:
             body = strip_reply_fallback_body(body)
 
         # Only Matrix-native relations authorize relation classification. Wire
@@ -126,7 +127,7 @@ class MatrixCodec(AdapterCodec):
             styled = from_html(
                 body,
                 effective_content,
-                reply=relation is not None and relation.kind in {"reply", "thread"},
+                reply=has_reply_fallback,
             )
             payload.update(styled.to_payload())
 
@@ -283,12 +284,8 @@ class MatrixCodec(AdapterCodec):
         # synthesize a reply relation: Matrix preserves the original event's
         # m.relates_to when applying m.new_content, and edits of replies omit
         # m.in_reply_to from the replacement event.
-        reply_target = relation.reply_to_event_id
-        if (
-            relation.kind == "thread"
-            and reply_target is not None
-            and relation.is_falling_back is not True
-        ):
+        reply_target = relation.explicit_reply_target
+        if relation.kind == "thread" and reply_target is not None:
             relations.append(
                 self._native_relation("reply", room_id, reply_target, None)
             )
