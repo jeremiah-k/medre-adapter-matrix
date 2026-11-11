@@ -25,6 +25,22 @@ class MatrixRelationDescriptor:
     reply_to_event_id: str | None = None
     is_falling_back: bool | None = None
 
+    @property
+    def has_reply_fallback(self) -> bool:
+        """A thread alone does not license removing authored quote lines."""
+        return self.kind == "reply" or (
+            self.kind == "thread" and self.reply_to_event_id is not None
+        )
+
+    @property
+    def explicit_reply_target(self) -> str | None:
+        """Separate an authored reply from a thread's compatibility parent."""
+        if self.kind == "reply":
+            return self.target_event_id
+        if self.kind == "thread" and self.is_falling_back is not True:
+            return self.reply_to_event_id
+        return None
+
     def to_native_metadata(self) -> dict[str, object]:
         """Return the stable relation fragment stored in Matrix native metadata."""
         result: dict[str, object] = {

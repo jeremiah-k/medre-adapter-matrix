@@ -42,3 +42,11 @@ Canonical reaction rendering MUST require an explicit nonempty relation key
 even when a reply relation is also present, and preserve that exact key. Message bodies, payload emoji, and presentation
 fallbacks MUST NOT supply a missing key. The explicitly enabled legacy
 presentation mode remains outside this canonical contract.
+
+## Thread and reply intent
+
+A thread relation alone MUST NOT remove authored quote lines or HTML as a reply
+fallback. Fallback removal requires a native reply marker. A thread with
+`m.in_reply_to` and `is_falling_back` false or absent MUST retain explicit reply
+intent alongside its thread relation. A true compatibility-fallback flag MUST
+NOT create an explicit reply relation.
