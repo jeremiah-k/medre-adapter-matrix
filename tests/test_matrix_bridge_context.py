@@ -219,6 +219,48 @@ def test_public_facts_survive_json_and_codec_only_from_supported_native_versions
     assert not decoded.relations
 
 
+@pytest.mark.parametrize(
+    "field", ["canonical_event_id", "source_transport_id", "native_message_id"]
+)
+def test_invalid_envelope_unicode_cannot_poison_authored_message(field):
+    envelope = {
+        "schema_version": 1,
+        "canonical_event_id": "peer",
+        "metadata_mode": "safe",
+        "source_transport_id": "sender",
+        "source_native_ref": {
+            "adapter": "radio",
+            "native_channel_id": "0",
+            "native_message_id": "0",
+            "native_thread_id": None,
+        },
+    }
+    if field == "native_message_id":
+        envelope["source_native_ref"][field] = "bad\ud800claim"
+    else:
+        envelope[field] = "bad\ud800claim"
+    decoded = MatrixCodec(
+        "matrix", MatrixConfig(adapter_id="matrix", homeserver="", user_id="")
+    ).decode(
+        {
+            "sender": "@peer:example.org",
+            "event_id": "$incoming",
+            "source": {
+                "type": "m.room.message",
+                "content": {
+                    "msgtype": "m.text",
+                    "body": "Authored text",
+                    "medre": {"envelope": envelope},
+                },
+            },
+        },
+        room_id="!room:example.org",
+    )
+    assert decoded.payload["body"] == "Authored text"
+    assert "relay" not in decoded.metadata.native.data["matrix"]
+    msgspec.json.encode(decoded)
+
+
 @pytest.mark.parametrize("context_label", [None, "", "Route"])
 @pytest.mark.parametrize("snapshot_label", [None, "", "Snapshot"])
 async def test_context_attribution_preserves_registry_origin_fallback(

@@ -9,7 +9,10 @@ available. Raw SDK blobs, credentials and relation binding authority MUST NOT be
 copied into this context.
 
 Inbound context MUST be validated for its supported version, field types and
-size bounds. Invalid context MUST be ignored without discarding the Matrix
+size bounds. Inbound relay-envelope claims MUST be serializable as UTF-8 before
+canonical storage. Invalid optional envelopes, including unencodable nested
+native references, MUST be ignored without dropping valid authored Matrix text.
+Invalid context MUST be ignored without discarding the Matrix
 message. Unknown fields MUST NOT be preserved. Valid context MUST remain a
 remote relay claim under Matrix-native metadata; it MUST NOT replace the actual
 Matrix sender, source adapter, native reference, or canonical relations. Local
