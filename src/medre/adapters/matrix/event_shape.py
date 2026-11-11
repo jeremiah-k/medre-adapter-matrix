@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import msgspec
+
 from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 from medre.adapters.metadata import current_namespace as _current_namespace
 from medre.adapters.metadata import versioned_namespace as _versioned_namespace
@@ -263,6 +265,13 @@ def matrix_relay_metadata(content: dict[str, Any]) -> dict[str, object] | None:
             projected["source_native_ref"] = dict(source_ref)
         else:
             projected["source_native_ref"] = None
+
+    # Optional peer provenance must be serializable before it reaches the
+    # canonical store. JSON-escaped lone surrogates are not valid UTF-8.
+    try:
+        msgspec.json.encode(projected)
+    except (UnicodeError, msgspec.EncodeError):
+        return None
 
     result: dict[str, object] = {"medre_envelope": projected}
     from medre.adapters.matrix.bridge_context import normalize_bridge_context
