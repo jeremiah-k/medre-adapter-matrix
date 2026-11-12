@@ -4,6 +4,8 @@ extraction, and reply body construction.
 
 from __future__ import annotations
 
+import pytest
+
 from medre.adapters.matrix.relations import (
     MatrixRelationHandler,
     build_reply_body,
@@ -112,6 +114,17 @@ class TestStripReplyFallbackBody:
     def test_empty_reply_text(self) -> None:
         body = "> <@alice:server> hi\n\n"
         assert strip_reply_fallback_body(body) == ""
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            "> authored quote\n\nanswer",
+            "> quoted only",
+            "> <@alice:server> looks like a quote but has no separator",
+        ],
+    )
+    def test_authored_reply_quotes_are_not_fallbacks(self, body: str) -> None:
+        assert strip_reply_fallback_body(body) == body
 
     def test_handler_delegation(self) -> None:
         handler = MatrixRelationHandler()

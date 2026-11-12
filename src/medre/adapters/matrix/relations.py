@@ -8,6 +8,7 @@ helpers for classifying those structures without coupling to nio event types.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -163,15 +164,19 @@ def extract_matrix_relation(
 def strip_reply_fallback_body(body: str) -> str:
     """Strip the Matrix reply fallback prefix from a message body."""
     normalised = body.replace("\r\n", "\n")
-    if not normalised.startswith("> "):
+    lines = normalised.split("\n")
+    # A Matrix fallback starts with a quoted MXID and ends at a blank line.
+    # A user's authored Markdown quote is not a fallback merely because this
+    # event also has m.in_reply_to (including when no preview was available).
+    if re.match(r"^> <@[^\s>]+:[^\s>]+>(?: |$)", lines[0]) is None:
         return body
 
-    lines = normalised.split("\n")
     idx = 0
     while idx < len(lines) and lines[idx].startswith("> "):
         idx += 1
-    if idx < len(lines) and lines[idx] == "":
-        idx += 1
+    if idx >= len(lines) or lines[idx] != "":
+        return body
+    idx += 1
 
     remainder = "\n".join(lines[idx:])
     if "\r\n" in body:
