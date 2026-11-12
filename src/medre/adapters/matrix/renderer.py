@@ -698,6 +698,11 @@ class MatrixRenderer:
             prefix, _reaction_prefix_meta = self._format_matrix_prefix(
                 event, target_adapter, ctx
             )
+            # A configured prefix must never contribute its own line break:
+            # any newline in it would stack a second blank line after the
+            # emote sender prefix. Normalize line breaks to spaces; spaces
+            # and tabs in the configured template are preserved.
+            prefix = prefix.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
 
             if not prefix or not prefix.strip():
                 visible_body = f"reacted {symbol} to {quoted}"
@@ -706,14 +711,18 @@ class MatrixRenderer:
             else:
                 visible_body = f"{prefix} reacted {symbol} to {quoted}"
 
+            # Exactly one intentional leading newline separates the reacted
+            # wording from the emote sender prefix in plain-text clients
+            # ("* Relay" then exactly one blank line). Stripping the composed
+            # wording keeps any configured prefix shape from leaving stray
+            # leading or trailing whitespace, so the single newline below is
+            # the only break at the start of the body. The HTML formatted
+            # body encodes that same break exactly once via its <p>
+            # boundary; deriving a <br/> from the newline stacked a second
+            # blank line, while removing the newline entirely lost the
+            # intended separation for text clients.
+            visible_body = visible_body.strip()
             content["msgtype"] = "m.emote"
-            # One intentional leading newline separates the reacted wording
-            # from the emote sender prefix in plain-text clients ("* Relay"
-            # then exactly one blank line).  The HTML formatted body encodes
-            # that same single break exactly once via its <p> boundary;
-            # deriving a <br/> from the newline too stacked a second blank
-            # line, while removing the newline entirely lost the intended
-            # separation for text clients.
             content["body"] = f"\n {visible_body}"
             content["formatted_body"] = self._text_to_html(visible_body)
 

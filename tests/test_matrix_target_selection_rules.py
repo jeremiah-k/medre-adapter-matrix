@@ -275,6 +275,21 @@ async def test_reaction_emote_quotes_enriched_target_text() -> None:
             '\n [RelayA] reacted 🎉 to "preview"',
             '<p>[RelayA] reacted 🎉 to "preview"</p>',
         ),
+        (
+            "\n[RelayA]: ",
+            '\n [RelayA]: reacted 🎉 to "preview"',
+            '<p>[RelayA]: reacted 🎉 to "preview"</p>',
+        ),
+        (
+            "[RelayA]:\n",
+            '\n [RelayA]: reacted 🎉 to "preview"',
+            '<p>[RelayA]: reacted 🎉 to "preview"</p>',
+        ),
+        (
+            "\n",
+            '\n reacted 🎉 to "preview"',
+            '<p>reacted 🎉 to "preview"</p>',
+        ),
     ],
 )
 async def test_reaction_emote_prefixed_body_has_exactly_one_leading_newline(
@@ -282,9 +297,11 @@ async def test_reaction_emote_prefixed_body_has_exactly_one_leading_newline(
 ) -> None:
     """Prefixed emote fallbacks keep the one-newline design in both bodies.
 
-    The visible prefix policy is unchanged; the single intentional break is
-    encoded once — a leading newline in the plain body and the ``<p>``
-    boundary in the HTML body, with no derived ``<br/>`` stacked after it.
+    The visible prefix attribution is unchanged apart from line breaks, which
+    a configured prefix may not contribute: newline-prefixed, newline-terminated,
+    and whitespace-only templates all yield exactly one leading newline in the
+    plain body and the ``<p>`` boundary as the single break in the HTML body,
+    with no derived ``<br/>`` stacked after it.
     """
     renderer = MatrixRenderer(
         configs={
