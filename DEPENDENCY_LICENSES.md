@@ -3,7 +3,7 @@
 The `LICENSE` in this repository covers original MEDRE-authored adapter code
 (MIT). It does not change the license of imported SDK code.
 
-- `mindroom-nio[e2e]==1.3.0`: ISC license — [release metadata](https://pypi.org/project/mindroom-nio/1.3.0/).
+- `mindroom-nio[e2e]==1.3.0`: ISC license — [release metadata](https://pypi.org/project/mindroom-nio/).
 - The durable sync backend requires the SDK crypto dependencies. Review their exact
   versions and license notices in the deployment lock before redistribution.
 

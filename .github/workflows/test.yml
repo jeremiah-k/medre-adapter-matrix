@@ -104,7 +104,7 @@ jobs:
         run: .core/.venv/bin/python -m pytest -v -m "matrix_sdk and not local_integration and not soak and not live and not hardware and not docker"
 
   windows-e2ee-contract:
-    # mindroom-nio 1.1.5 requires POSIX file leases. Lane stays off until
+    # mindroom-nio requires POSIX file leases. Lane stays off until
     # Windows ownership support is released; crypto import is insufficient.
     # Restore by setting the WINDOWS_E2EE_CONTRACT repository variable to 1.
     if: vars.WINDOWS_E2EE_CONTRACT == '1'

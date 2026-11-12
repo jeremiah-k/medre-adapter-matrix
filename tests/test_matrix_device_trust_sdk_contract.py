@@ -177,7 +177,7 @@ async def test_durable_joined_members_populates_cache_not_room_projection() -> N
 
 
 def test_pinned_nio_keys_query_delegates_to_durable_locked_transaction() -> None:
-    """Review the real 1.3.0 SDK path, not an invented owner method."""
+    """Review the real pinned SDK path, not an invented owner method."""
     import inspect
 
     import nio

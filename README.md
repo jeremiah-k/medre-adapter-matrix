@@ -17,7 +17,7 @@ medre adapters
 
 Matrix requires Python 3.12+ and includes its durable SQLite/crypto backend.
 The `matrix[e2e]` spelling remains a compatible installation alias.
-The released mindroom-nio 1.1.5 store requires POSIX file leases; Windows
+The released mindroom-nio store requires POSIX file leases; Windows
 production sessions require a provider release with Windows lease support.
 
 On Windows, the package-changing command prints a uv command to run **after**

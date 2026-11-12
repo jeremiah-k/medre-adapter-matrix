@@ -669,7 +669,7 @@ class MatrixSession:
             users = getattr(room, "users", None)
             return tuple(users) if isinstance(users, dict) else None
         if self._durable_sync_enabled:
-            # mindroom-nio 1.3.0 keeps joined_members results here without
+            # mindroom-nio keeps joined_members results here without
             # changing the durable room projection or members_synced flag.
             owner = getattr(client, "_durable_session", None)
             outbound = getattr(owner, "_outbound", None)
@@ -722,7 +722,7 @@ class MatrixSession:
             if self._peer_device_members(room_id) is None:
                 return unavailable
             if getattr(client, "should_query_keys", False) is True:
-                # mindroom-nio 1.3.0 delegates the public call to the
+                # mindroom-nio delegates the public call to the
                 # durable outbound owner's locked, transactional query path
                 # when a durable session is attached. Do not bypass it.
                 await client.keys_query()
