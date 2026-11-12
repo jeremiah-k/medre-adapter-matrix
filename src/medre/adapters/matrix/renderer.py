@@ -700,15 +700,22 @@ class MatrixRenderer:
             )
 
             if not prefix or not prefix.strip():
-                emote_body = f"reacted {symbol} to {quoted}"
+                visible_body = f"reacted {symbol} to {quoted}"
             elif prefix[-1].isspace():
-                emote_body = f"{prefix}reacted {symbol} to {quoted}"
+                visible_body = f"{prefix}reacted {symbol} to {quoted}"
             else:
-                emote_body = f"{prefix} reacted {symbol} to {quoted}"
+                visible_body = f"{prefix} reacted {symbol} to {quoted}"
 
             content["msgtype"] = "m.emote"
-            content["body"] = emote_body
-            content["formatted_body"] = self._text_to_html(emote_body)
+            # One intentional leading newline separates the reacted wording
+            # from the emote sender prefix in plain-text clients ("* Relay"
+            # then exactly one blank line).  The HTML formatted body encodes
+            # that same single break exactly once via its <p> boundary;
+            # deriving a <br/> from the newline too stacked a second blank
+            # line, while removing the newline entirely lost the intended
+            # separation for text clients.
+            content["body"] = f"\n {visible_body}"
+            content["formatted_body"] = self._text_to_html(visible_body)
 
             return _reaction_prefix_meta, "m.room.message"
 
