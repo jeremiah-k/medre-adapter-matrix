@@ -284,6 +284,27 @@ class TestMatrixCodec:
 
         assert event.payload["body"] == "My reply"
 
+    @pytest.mark.parametrize(
+        "body",
+        ["> authored quote\n\nanswer", "> authored quote only"],
+    )
+    def test_decode_reply_without_fallback_keeps_authored_quote(
+        self, body: str
+    ) -> None:
+        """A reply relation alone does not authorize deleting a quote."""
+        codec = MatrixCodec("matrix-1", _make_config())
+        native = _make_native_event(
+            body=body,
+            content={
+                "msgtype": "m.text",
+                "body": body,
+                "m.relates_to": {"m.in_reply_to": {"event_id": "$orig-001"}},
+            },
+        )
+        event = codec.decode(native, room_id="!room:server")
+        assert event.payload["body"] == body
+        assert event.relations[0].relation_type == "reply"
+
     def test_decode_non_reply_body_not_stripped(self) -> None:
         """decode does not strip body from non-reply messages."""
         codec = MatrixCodec("matrix-1", _make_config())
