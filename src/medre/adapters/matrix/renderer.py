@@ -556,9 +556,14 @@ class MatrixRenderer:
 
         Preference order:
 
-        1. ``rel.fallback_text`` (core relation enrichment)
-        2. Empty string — the caller renders an honest fallback
+        1. ``rel.metadata['original_text']`` (core relation enrichment)
+        2. ``rel.fallback_text`` (core relation enrichment)
+        3. Empty string — the caller renders an honest fallback
         """
+        rel_meta = getattr(rel, "metadata", {}) or {}
+        text = rel_meta.get("original_text")
+        if text:
+            return str(text)
         if rel.fallback_text:
             return str(rel.fallback_text)
         return ""
@@ -652,7 +657,10 @@ class MatrixRenderer:
 
         When no Matrix-native target exists, falls back to an
         ``m.emote`` ``m.room.message`` with the attribution prefix and
-        the target text preview.
+        the target text preview.  The preview comes from canonical
+        relation enrichment; when the target text is genuinely
+        unresolvable the body says "an earlier message" instead of
+        quoting an empty string.
 
         The canonical ``rel.target_event_id`` is **never** used as a
         Matrix event ID — it is an internal MEDRE canonical ID.
@@ -686,16 +694,17 @@ class MatrixRenderer:
             # Missing Matrix-native target → m.emote fallback
             symbol = rel.key
             original_text = self._abbreviate_text(self._extract_original_text(rel))
+            quoted = f'"{original_text}"' if original_text else "an earlier message"
             prefix, _reaction_prefix_meta = self._format_matrix_prefix(
                 event, target_adapter, ctx
             )
 
             if not prefix or not prefix.strip():
-                emote_body = f'\n reacted {symbol} to "{original_text}"'
+                emote_body = f"reacted {symbol} to {quoted}"
             elif prefix[-1].isspace():
-                emote_body = f'\n {prefix}reacted {symbol} to "{original_text}"'
+                emote_body = f"{prefix}reacted {symbol} to {quoted}"
             else:
-                emote_body = f'\n {prefix} reacted {symbol} to "{original_text}"'
+                emote_body = f"{prefix} reacted {symbol} to {quoted}"
 
             content["msgtype"] = "m.emote"
             content["body"] = emote_body
