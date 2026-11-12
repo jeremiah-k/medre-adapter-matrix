@@ -294,7 +294,9 @@ async def test_reaction_emote_prefixed_body_has_exactly_one_leading_newline(
     renderer._configs[_TARGET] = replace(
         renderer._configs[_TARGET], relay_prefix=template
     )
-    event = _event(relations=(_reaction(fallback_text="preview"),), payload={"body": "🎉"})
+    event = _event(
+        relations=(_reaction(fallback_text="preview"),), payload={"body": "🎉"}
+    )
     result = await renderer.render(event, _ctx())
 
     content = _payload_content(result)
