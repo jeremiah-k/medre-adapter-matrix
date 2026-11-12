@@ -222,6 +222,9 @@ class TestOutboundFormattedBody:
         assert "<p>" in fb
         # The emote body contains the reaction text
         assert "reacted" in fb
+        # The single intentional break is the <p> boundary; no stacked <br/>
+        assert not fb.startswith("<p><br/>")
+        assert "<br/><br/>" not in fb
 
     async def test_true_m_reaction_clears_formatted_body(self) -> None:
         """True m.reaction events must not carry format or formatted_body."""

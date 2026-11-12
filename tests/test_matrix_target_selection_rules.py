@@ -16,9 +16,12 @@ Locks the current target-selection contracts:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
+import pytest
 from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events import (
     CanonicalEvent,
     EventMetadata,
@@ -225,8 +228,13 @@ def _reaction(
     )
 
 
-async def test_reaction_emote_body_has_no_leading_newline() -> None:
-    """The emote fallback body starts directly with the reacted wording."""
+async def test_reaction_emote_body_has_exactly_one_leading_newline() -> None:
+    """One intentional newline separates the emote prefix from the wording.
+
+    The plain body carries exactly one leading newline (``* Relay`` then one
+    blank line), and the HTML formatted body encodes that same break exactly
+    once via its ``<p>`` boundary — never a stacked ``<br/>``.
+    """
     renderer = MatrixRenderer()
     event = _event(relations=(_reaction(),), payload={"body": "🎉"})
     result = await renderer.render(event, _ctx())
@@ -234,9 +242,9 @@ async def test_reaction_emote_body_has_no_leading_newline() -> None:
     content = _payload_content(result)
     assert content["msgtype"] == "m.emote"
     body = content["body"]
-    assert body.startswith("reacted 🎉 to an earlier message")
-    assert not body.startswith(("\n", " "))
-    assert not content["formatted_body"].startswith("<p><br/>")
+    assert body.startswith("\n reacted 🎉 to an earlier message")
+    assert len(body) - len(body.lstrip("\n")) == 1
+    assert content["formatted_body"] == "<p>reacted 🎉 to an earlier message</p>"
 
 
 async def test_reaction_emote_quotes_enriched_target_text() -> None:
@@ -249,9 +257,51 @@ async def test_reaction_emote_quotes_enriched_target_text() -> None:
     result = await renderer.render(event, _ctx())
 
     body = _payload_content(result)["body"]
-    assert body.startswith("reacted 🎉 to")
+    assert body.startswith("\n reacted 🎉 to")
+    assert len(body) - len(body.lstrip("\n")) == 1
     assert 'to "Ok on medre now. How do things look?"' in body
-    assert not body.startswith(("\n", " "))
+
+
+@pytest.mark.parametrize(
+    ("template", "expected_body", "expected_html"),
+    [
+        (
+            "[RelayA]: ",
+            '\n [RelayA]: reacted 🎉 to "preview"',
+            '<p>[RelayA]: reacted 🎉 to "preview"</p>',
+        ),
+        (
+            "[RelayA]",
+            '\n [RelayA] reacted 🎉 to "preview"',
+            '<p>[RelayA] reacted 🎉 to "preview"</p>',
+        ),
+    ],
+)
+async def test_reaction_emote_prefixed_body_has_exactly_one_leading_newline(
+    template, expected_body, expected_html
+) -> None:
+    """Prefixed emote fallbacks keep the one-newline design in both bodies.
+
+    The visible prefix policy is unchanged; the single intentional break is
+    encoded once — a leading newline in the plain body and the ``<p>``
+    boundary in the HTML body, with no derived ``<br/>`` stacked after it.
+    """
+    renderer = MatrixRenderer(
+        configs={
+            _TARGET: MatrixConfig(_TARGET, "https://example.org", "@relay:example.org")
+        }
+    )
+    renderer._configs[_TARGET] = replace(
+        renderer._configs[_TARGET], relay_prefix=template
+    )
+    event = _event(relations=(_reaction(fallback_text="preview"),), payload={"body": "🎉"})
+    result = await renderer.render(event, _ctx())
+
+    content = _payload_content(result)
+    assert content["msgtype"] == "m.emote"
+    assert content["body"] == expected_body
+    assert content["formatted_body"] == expected_html
+    assert "<br/>" not in content["formatted_body"]
 
 
 async def test_reaction_emote_prefers_enrichment_original_text_metadata() -> None:
