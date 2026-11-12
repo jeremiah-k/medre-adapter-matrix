@@ -206,6 +206,81 @@ async def test_reaction_emote_fallback_when_no_native_ref_at_all() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reaction emote fallback shaping
+# ---------------------------------------------------------------------------
+
+
+def _reaction(
+    fallback_text: str | None = None,
+    metadata: dict[str, object] | None = None,
+    key: str = "🎉",
+) -> EventRelation:
+    return EventRelation(
+        relation_type="reaction",
+        target_event_id="canonical-99",
+        target_native_ref=None,
+        key=key,
+        fallback_text=fallback_text,
+        metadata=metadata or {},
+    )
+
+
+async def test_reaction_emote_body_has_no_leading_newline() -> None:
+    """The emote fallback body starts directly with the reacted wording."""
+    renderer = MatrixRenderer()
+    event = _event(relations=(_reaction(),), payload={"body": "🎉"})
+    result = await renderer.render(event, _ctx())
+
+    content = _payload_content(result)
+    assert content["msgtype"] == "m.emote"
+    body = content["body"]
+    assert body.startswith("reacted 🎉 to an earlier message")
+    assert not body.startswith(("\n", " "))
+    assert not content["formatted_body"].startswith("<p><br/>")
+
+
+async def test_reaction_emote_quotes_enriched_target_text() -> None:
+    """The fallback quotes the canonical target preview, never empty quotes."""
+    renderer = MatrixRenderer()
+    event = _event(
+        relations=(_reaction(fallback_text="Ok on medre now. How do things look?"),),
+        payload={"body": "🎉"},
+    )
+    result = await renderer.render(event, _ctx())
+
+    body = _payload_content(result)["body"]
+    assert body.startswith("reacted 🎉 to")
+    assert 'to "Ok on medre now. How do things look?"' in body
+    assert not body.startswith(("\n", " "))
+
+
+async def test_reaction_emote_prefers_enrichment_original_text_metadata() -> None:
+    """``metadata['original_text']`` from core enrichment wins over nothing."""
+    renderer = MatrixRenderer()
+    event = _event(
+        relations=(_reaction(metadata={"original_text": "preview from enrichment"}),),
+        payload={"body": "🎉"},
+    )
+    result = await renderer.render(event, _ctx())
+
+    assert 'reacted 🎉 to "preview from enrichment"' in _payload_content(result)["body"]
+
+
+async def test_reaction_emote_truncates_long_target_text() -> None:
+    """Long target previews truncate with the house ellipsis convention."""
+    renderer = MatrixRenderer()
+    long_text = "x" * 60
+    event = _event(
+        relations=(_reaction(fallback_text=long_text),), payload={"body": "🎉"}
+    )
+    result = await renderer.render(event, _ctx())
+
+    body = _payload_content(result)["body"]
+    assert f'to "{"x" * 40}..."' in body
+    assert long_text not in body
+
+
+# ---------------------------------------------------------------------------
 # Missing target (no relations)
 # ---------------------------------------------------------------------------
 
