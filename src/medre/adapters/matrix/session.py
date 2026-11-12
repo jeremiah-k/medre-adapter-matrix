@@ -1060,8 +1060,8 @@ class MatrixSession:
         ``ENCRYPTION_ENABLED=True`` and ``restore_login`` calls
         ``load_store()`` which requires a valid ``device_id``.
         We discover the device_id via ``whoami()`` before
-        ``restore_login``, matching mmrelay's pattern, so
-        plaintext mode never uploads keys with a mismatched device_id.
+        ``restore_login``, so plaintext mode never uploads keys with a
+        mismatched device_id.
         """
         import nio
 
@@ -2654,10 +2654,10 @@ class MatrixSession:
                 self._last_reconnect_error = str(exc)
                 self._reconnecting = True
                 # Matrix is a long-lived relay transport.  Keep retrying until
-                # shutdown (matching MMRelay's proven daemon behavior) while
-                # capping both the delay and exponent so a long outage cannot
-                # overflow the backoff calculation.  A stale owner that cannot
-                # be terminated remains the separate fail-closed exception.
+                # shutdown while capping both the delay and exponent so a long
+                # outage cannot overflow the backoff calculation.  A stale
+                # owner that cannot be terminated remains the separate
+                # fail-closed exception.
                 exponent = min(self._reconnect_attempts - 1, 16)
                 raw_delay = min(
                     _BACKOFF_BASE * (2**exponent),

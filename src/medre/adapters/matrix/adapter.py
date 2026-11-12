@@ -683,9 +683,9 @@ class MatrixAdapter(AdapterContract):
 
         # Sync readiness/watchdog: authentication alone is not enough to
         # declare the transport healthy.  Until one sync response succeeds,
-        # report degraded; MMRelay likewise withholds runtime readiness until
-        # its initial Matrix sync path completes.  After first progress, the
-        # configured stale bound and active reconnect state govern degradation.
+        # report degraded; runtime readiness is withheld until the initial
+        # Matrix sync path completes.  After first progress, the configured
+        # stale bound and active reconnect state govern degradation.
         # Uses a fakeable clock (``self._clock``) so tests can control time
         # without fixed sleeps.
         if health == "healthy" and self._session is not None:

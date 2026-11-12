@@ -1,4 +1,4 @@
-"""Embedding policy applies to wire content independently of mmrelay opt-in."""
+"""Embedding policy applies to wire content independently of source adapters."""
 
 import json
 from pathlib import Path
@@ -44,19 +44,13 @@ def _event() -> CanonicalEvent:
 
 
 @pytest.mark.parametrize("mode", ["off", "minimal", "safe", "full"])
-@pytest.mark.parametrize("compatibility", [False, True])
 @pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
-async def test_metadata_mode_and_mmrelay_switch_are_independent(
-    mode, compatibility, strategy
-):
+async def test_metadata_mode_and_source_config_are_independent(mode, strategy):
     renderer = MatrixRenderer(
         configs={
             "matrix": SimpleNamespace(
                 metadata_embedding_mode=mode, access_token="CONFIG_TOKEN_NEVER_EMBED"
             )
-        },
-        source_configs={
-            "independent-source": SimpleNamespace(mmrelay_compatibility=compatibility)
         },
     )
     ctx = RenderingContext(
@@ -64,7 +58,7 @@ async def test_metadata_mode_and_mmrelay_switch_are_independent(
     )
     result = await renderer.render(_event(), ctx)
     content = matrix_payload_content(result)
-    assert ("meshtastic_id" in content) is compatibility
+    assert not any(key.startswith("meshtastic_") for key in content)
     assert "CONFIG_TOKEN_NEVER_EMBED" not in str(content)
     if mode == "off":
         assert "medre" not in content
@@ -100,9 +94,8 @@ async def test_metadata_mode_and_mmrelay_switch_are_independent(
 
 
 @pytest.mark.parametrize("relation_type", ["reply", "reaction"])
-@pytest.mark.parametrize("compatibility", [False, True])
-async def test_legacy_relation_fields_require_mmrelay_opt_in(
-    relation_type, compatibility
+async def test_relations_render_through_canonical_shape_without_legacy_fields(
+    relation_type,
 ):
     from msgspec.structs import replace
     from medre.core.events import EventRelation
@@ -124,11 +117,7 @@ async def test_legacy_relation_fields_require_mmrelay_opt_in(
             ),
         ),
     )
-    renderer = MatrixRenderer(
-        source_configs={
-            event.source_adapter: SimpleNamespace(mmrelay_compatibility=compatibility)
-        },
-    )
+    renderer = MatrixRenderer()
     result = await renderer.render(
         event,
         RenderingContext(
@@ -138,9 +127,11 @@ async def test_legacy_relation_fields_require_mmrelay_opt_in(
         ),
     )
     content = matrix_payload_content(result)
-    legacy_keys = {key for key in content if key.startswith("meshtastic_")}
-    assert bool(legacy_keys) is compatibility
-    if compatibility:
-        assert content["meshtastic_replyId"] == "77"
-    elif relation_type == "reply":
+    assert not any(key.startswith("meshtastic_") for key in content)
+    if relation_type == "reply":
         assert content["m.relates_to"]["m.in_reply_to"]["event_id"] == "$target"
+    else:
+        # Unbound reaction target degrades to the emote fallback; the quoted
+        # preview comes from canonical relation enrichment, not legacy keys.
+        assert content["msgtype"] == "m.emote"
+        assert 'reacted 👍 to "Original text"' in content["body"]

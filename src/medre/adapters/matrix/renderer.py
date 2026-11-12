@@ -13,7 +13,8 @@ matches on that platform string directly.
 
 **Supported relation types**: text messages, native replies, native
 threads, native edits (``m.replace``), and reactions (true
-``m.reaction`` or MMRelay emote fallback).  Native deletes render as
+``m.reaction`` when the target resolves to this destination, else an
+``m.emote`` fallback message).  Native deletes render as
 ``redact_event`` operations.
 
 Every native render emits a closed
@@ -35,10 +36,9 @@ import msgspec
 from typing import Any, Mapping
 
 from .styling import render_payload, source_text
-from medre.adapters.matrix.event_shape import mmrelay_interop_fields
 from medre.adapters.matrix.metadata import build_matrix_metadata_content
 from medre.adapters.matrix.outbound import MatrixOutboundOperation
-from medre.adapters.metadata import current_native_namespace, project_source_fields
+from medre.adapters.metadata import project_source_fields
 from medre.core.events import CanonicalEvent, EventRelation
 from medre.core.events.attachments import (
     attachment_descriptor_from_event_payload,
@@ -57,20 +57,6 @@ from medre.core.rendering.text_helpers import (
     extract_relation_text,
     truncate_text,
     truncate_text_bytes,
-)
-from medre.interop.mmrelay import (
-    EMOJI_FLAG_VALUE,
-    KEY_EMOJI,
-    KEY_ID,
-    KEY_LONGNAME,
-    KEY_MESHNET,
-    KEY_PORTNUM,
-    KEY_REACTION_KEY,
-    KEY_REPLY_ID,
-    KEY_SHORTNAME,
-    KEY_TEXT,
-    PORTNUM_TEXT,
-    derive_meshnet_value,
 )
 
 # Transport-neutral media kind → Matrix wire msgtype.  Unknown or missing
@@ -142,50 +128,15 @@ class MatrixRenderer:
     def __init__(
         self,
         *,
-        source_configs: Mapping[str, Any] | None = None,
         source_attribution: dict[str, Any] | None = None,
         configs: Mapping[str, Any] | None = None,
     ) -> None:
-        self._source_configs: dict[str, Any] = dict(source_configs or {})
         self._source_attribution: dict[str, Any] = dict(source_attribution or {})
         self._configs: dict[str, Any] = dict(configs or {})
 
     # ------------------------------------------------------------------
     # Source-adapter config resolution
     # ------------------------------------------------------------------
-
-    def _resolve_source_config(self, event: CanonicalEvent) -> Any | None:
-        """Return the source adapter config for *event*, or ``None``.
-
-        Looks up ``event.source_adapter`` in the ``source_configs`` mapping
-        supplied at construction.  Returns ``None`` when no mapping is
-        configured or the source adapter is not found — callers use
-        empty/neutral defaults (no Meshtastic prefix or metadata).
-        """
-        if not self._source_configs:
-            return None
-        return self._source_configs.get(event.source_adapter)
-
-    def _resolve_mmrelay_meshnet(
-        self,
-        event: CanonicalEvent,
-        ctx_source_origin_label: str | None = None,
-    ) -> str:
-        """Resolve the meshnet label for mmrelay ``KEY_MESHNET``.
-
-        Uses :func:`~medre.interop.mmrelay.derive_meshnet_value` with
-        precedence: *ctx_source_origin_label* (route/context) > adapter
-        ``origin_label`` from source_attribution registry > empty string.
-
-        Parameters
-        ----------
-        event:
-            The canonical event (used to look up adapter origin_label).
-        ctx_source_origin_label:
-            Route/context origin label from ``RenderingContext``.
-        """
-        adapter_label = self._resolve_source_origin_label(event)
-        return derive_meshnet_value(ctx_source_origin_label, adapter_label)
 
     def _get_matrix_relay_prefix(
         self, event: CanonicalEvent, target_adapter: str = ""
@@ -202,55 +153,6 @@ class MatrixRenderer:
             if target_cfg is not None:
                 return getattr(target_cfg, "relay_prefix", "")
         return ""
-
-    def _get_mmrelay_compat(self, event: CanonicalEvent) -> bool:
-        """Resolve mmrelay_compatibility for *event*'s source adapter.
-
-        Returns the config's ``mmrelay_compatibility`` when a source config
-        is matched; otherwise returns ``False`` (neutral default).
-        """
-        cfg = self._resolve_source_config(event)
-        if cfg is not None:
-            return getattr(cfg, "mmrelay_compatibility", False)
-        return False
-
-    def _resolve_source_origin_label(self, event: CanonicalEvent) -> str | None:
-        """Look up source origin_label from the source_attribution registry.
-
-        Returns the ``origin_label`` for ``event.source_adapter`` when
-        found in the registry; otherwise ``None``.
-        """
-        sa = self._source_attribution.get(event.source_adapter)
-        if sa is not None:
-            return getattr(sa, "origin_label", None)
-        return None
-
-    @staticmethod
-    def _resolve_mmrelay_sender_names(
-        native_data: dict[str, object],
-    ) -> tuple[str, str]:
-        """Resolve MMRelay sender names from current transport metadata.
-
-        Meshtastic-originated canonical events use the versioned
-        ``native.meshtastic`` namespace.  Explicit MMRelay wire fields under
-        ``native.interop.mmrelay`` remain the fallback for externally encoded
-        MMRelay events.  Abandoned root/dotted MEDRE fields are not read.
-        """
-        meshtastic = current_native_namespace(native_data, "meshtastic")
-        interop = mmrelay_interop_fields(native_data)
-        longname = meshtastic.get("longname") or interop.get(KEY_LONGNAME) or ""
-        shortname = meshtastic.get("shortname") or interop.get(KEY_SHORTNAME) or ""
-        return str(longname), str(shortname)
-
-    @staticmethod
-    def _resolve_mmrelay_packet_id(native_data: dict[str, object]) -> str:
-        """Resolve the Meshtastic packet ID used by the MMRelay wire contract."""
-        meshtastic = current_native_namespace(native_data, "meshtastic")
-        interop = mmrelay_interop_fields(native_data)
-        packet_id = meshtastic.get("packet_id")
-        if packet_id is None:
-            packet_id = interop.get(KEY_ID)
-        return str(packet_id) if packet_id is not None else ""
 
     def _build_source_attribution(
         self,
@@ -354,12 +256,11 @@ class MatrixRenderer:
         information is preserved as readable text.  The result carries
         ``fallback_applied="strategy_fallback_text"``.
 
-        **Native / direct mode** — replies preserve ``m.in_reply_to``
-        and inject ``KEY_REPLY_ID`` from native/relation metadata when
-        available.  Reactions render as true ``m.reaction`` events when
-        a target event/native Matrix id is available and mmrelay_compat
-        is false.  When mmrelay_compat is true or the target is missing,
-        an ``m.emote`` fallback is rendered with MMRelay keys.
+        **Native / direct mode** — replies preserve ``m.in_reply_to``.
+        Reactions render as true ``m.reaction`` events when the target
+        resolves to a Matrix-native id owned by this destination; when
+        the target is missing or foreign, an ``m.emote`` fallback
+        message is rendered instead.
 
         Threads render as native ``m.thread`` events rooted at the bound
         destination thread root.  Edits render ``m.replace`` /
@@ -385,10 +286,8 @@ class MatrixRenderer:
             The rendered Matrix content dict wrapped in a result.
         """
         reaction = _find_relation(event.relations, "reaction")
-        if (
-            reaction is not None
-            and not self._get_mmrelay_compat(event)
-            and (not isinstance(reaction.key, str) or not reaction.key.strip())
+        if reaction is not None and (
+            not isinstance(reaction.key, str) or not reaction.key.strip()
         ):
             raise ValueError("Canonical reaction requires an explicit nonempty key")
         target_adapter = ctx.target_adapter
@@ -490,7 +389,6 @@ class MatrixRenderer:
                         "event_id": mx_event_id,
                     }
                 }
-            self._inject_mmrelay_reply_metadata(event, rel, content, mx_event_id)
 
         elif selected_reaction is not None:
             reaction_prefix_meta, event_type = self._render_reaction(
@@ -503,11 +401,6 @@ class MatrixRenderer:
 
         # Embed metadata envelope
         self._embed_metadata(event, ctx, content)
-
-        # Inject mmrelay-compatible metadata when enabled (skip for
-        # reactions — _render_reaction already handles all MMRelay keys).
-        if self._get_mmrelay_compat(event) and not _is_reaction:
-            self._inject_mmrelay_metadata(event, content, ctx.source_origin_label)
 
         metadata: dict[str, object] = {
             "renderer": self.name,
@@ -527,27 +420,6 @@ class MatrixRenderer:
             metadata=metadata,
             fallback_applied=None,
         )
-
-    def _inject_mmrelay_reply_metadata(
-        self,
-        event: CanonicalEvent,
-        relation: EventRelation,
-        content: dict[str, object],
-        matrix_event_id: str | None = None,
-    ) -> None:
-        """Retain opt-in reply identity without inventing a native relation."""
-        if not self._get_mmrelay_compat(event):
-            return
-        reply_id = relation.metadata.get("meshtastic_reply_id")
-        if reply_id in (None, ""):
-            native_data = (
-                dict(event.metadata.native.data) if event.metadata.native else {}
-            )
-            reply_id = mmrelay_interop_fields(native_data).get(KEY_REPLY_ID)
-        if reply_id in (None, ""):
-            reply_id = matrix_event_id
-        if reply_id not in (None, ""):
-            content[KEY_REPLY_ID] = str(reply_id)
 
     # ------------------------------------------------------------------
     # Fallback-text rendering
@@ -614,14 +486,6 @@ class MatrixRenderer:
         # Embed metadata envelope
         self._embed_metadata(event, ctx, content)
 
-        # Inject mmrelay-compatible metadata when enabled — relation
-        # rendering is degraded but transport metadata is still valid.
-        if self._get_mmrelay_compat(event):
-            self._inject_mmrelay_metadata(event, content, ctx.source_origin_label)
-        reply = reply_relation or _find_relation(event.relations, "reply")
-        if reply is not None:
-            self._inject_mmrelay_reply_metadata(event, reply, content)
-
         result_metadata: dict[str, object] = {
             "renderer": self.name,
             "matrix_operation": "send_event",
@@ -686,58 +550,17 @@ class MatrixRenderer:
     # Reaction helpers
     # ------------------------------------------------------------------
 
-    _REACTION_SYMBOL_FALLBACK = "\u26a0\ufe0f"  # ⚠️
-
     @staticmethod
-    def _extract_reaction_symbol(rel: EventRelation, event: CanonicalEvent) -> str:
-        """Return the reaction emoji/symbol with a fallback chain.
-
-        Preference order: ``rel.key``, ``event.payload['key']``,
-        ``event.payload['emoji']``, ``event.payload['body']``.
-        Leading/trailing whitespace is stripped.  Falls back to ⚠️
-        when all sources are blank.
-        """
-        for source in (
-            rel.key,
-            event.payload.get("key"),
-            event.payload.get("emoji"),
-            event.payload.get("body"),
-        ):
-            if source is not None:
-                stripped = str(source).strip()
-                if stripped:
-                    return stripped
-        return MatrixRenderer._REACTION_SYMBOL_FALLBACK
-
-    @staticmethod
-    def _extract_original_text(rel: EventRelation, event: CanonicalEvent) -> str:
+    def _extract_original_text(rel: EventRelation) -> str:
         """Return the original message text preview for a reaction.
 
         Preference order:
 
-        1. ``rel.metadata['meshtastic_text']`` or ``rel.metadata['text']``
-        2. ``rel.fallback_text``
-        3. Event native metadata ``native.interop.mmrelay.meshtastic_text``
-        4. Empty string
+        1. ``rel.fallback_text`` (core relation enrichment)
+        2. Empty string — the caller renders an honest fallback
         """
-        # 1. Relation metadata (set by pipeline enrichment / codec)
-        rel_meta = getattr(rel, "metadata", {}) or {}
-        text = rel_meta.get("meshtastic_text") or rel_meta.get("text")
-        if text:
-            return str(text)
-
-        # 2. Fallback text on the relation
         if rel.fallback_text:
             return str(rel.fallback_text)
-
-        # 3. Event native metadata fields
-        if event.metadata and event.metadata.native:
-            native_data = event.metadata.native.data
-            text = mmrelay_interop_fields(native_data).get(KEY_TEXT)
-            if text:
-                return str(text)
-
-        # 4. Empty string
         return ""
 
     @staticmethod
@@ -824,13 +647,12 @@ class MatrixRenderer:
         """Render a reaction relation into the Matrix content dict.
 
         When a Matrix-native target ID (owned by *target_adapter*) is
-        available and mmrelay_compat is false, produces a true
-        ``m.reaction`` event (the caller emits it with event type
-        ``"m.reaction"``).
+        available, produces a true ``m.reaction`` event (the caller
+        emits it with event type ``"m.reaction"``).
 
-        When mmrelay_compat is true or no Matrix-native target exists,
-        falls back to an ``m.emote`` ``m.room.message`` with
-        MMRelay-compatible body and full mesh metadata.
+        When no Matrix-native target exists, falls back to an
+        ``m.emote`` ``m.room.message`` with the attribution prefix and
+        the target text preview.
 
         The canonical ``rel.target_event_id`` is **never** used as a
         Matrix event ID — it is an internal MEDRE canonical ID.
@@ -846,43 +668,27 @@ class MatrixRenderer:
             ctx.target_channel if ctx is not None else None,
         )
 
-        # Extract MMRelay reply ID from relation metadata for fallback
-        rel_meta = getattr(rel, "metadata", {}) or {}
-
-        if mx_event_id is not None and not self._get_mmrelay_compat(event):
+        if mx_event_id is not None:
             # True Matrix reaction — emitted as an m.reaction event
             # Remove default msgtype/body/format/formatted_body set at top of render()
             content.pop("msgtype", None)
             content.pop("body", None)
             content.pop("format", None)
             content.pop("formatted_body", None)
-            symbol = (
-                self._extract_reaction_symbol(rel, event)
-                if self._get_mmrelay_compat(event)
-                else rel.key
-            )
             content["m.relates_to"] = {
                 "rel_type": "m.annotation",
                 "event_id": mx_event_id,
-                "key": symbol,
+                "key": rel.key,
             }
             # True m.reaction carries no prefix metadata — body is removed.
             return {}, "m.reaction"
         else:
-            # mmrelay_compat or missing Matrix-native target → m.emote fallback
-            symbol = (
-                self._extract_reaction_symbol(rel, event)
-                if self._get_mmrelay_compat(event)
-                else rel.key
-            )
-            original_text = self._abbreviate_text(
-                self._extract_original_text(rel, event)
-            )
+            # Missing Matrix-native target → m.emote fallback
+            symbol = rel.key
+            original_text = self._abbreviate_text(self._extract_original_text(rel))
             prefix, _reaction_prefix_meta = self._format_matrix_prefix(
                 event, target_adapter, ctx
             )
-
-            # Store prefix metadata to return to caller for result metadata.
 
             if not prefix or not prefix.strip():
                 emote_body = f'\n reacted {symbol} to "{original_text}"'
@@ -894,35 +700,6 @@ class MatrixRenderer:
             content["msgtype"] = "m.emote"
             content["body"] = emote_body
             content["formatted_body"] = self._text_to_html(emote_body)
-            if self._get_mmrelay_compat(event):
-                content[KEY_EMOJI] = EMOJI_FLAG_VALUE
-                content[KEY_REACTION_KEY] = symbol
-
-                # KEY_TEXT: original text preview (not reaction emoji)
-                content[KEY_TEXT] = original_text
-
-                # KEY_REPLY_ID: prefer meshtastic_reply_id from metadata,
-                # fall back to the Matrix-native target event ID when available.
-                mmrelay_reply_id = rel_meta.get("meshtastic_reply_id")
-                if mmrelay_reply_id not in (None, ""):
-                    content[KEY_REPLY_ID] = str(mmrelay_reply_id)
-                elif mx_event_id not in (None, ""):
-                    content[KEY_REPLY_ID] = str(mx_event_id)
-
-                # Mesh provenance metadata
-                native_data: dict[str, object] = {}
-                if event.metadata and event.metadata.native:
-                    native_data = dict(event.metadata.native.data)
-
-                content[KEY_ID] = self._resolve_mmrelay_packet_id(native_data)
-                _longname, _shortname = self._resolve_mmrelay_sender_names(native_data)
-                content[KEY_LONGNAME] = _longname
-                content[KEY_SHORTNAME] = _shortname
-                content[KEY_MESHNET] = self._resolve_mmrelay_meshnet(
-                    event,
-                    ctx.source_origin_label if ctx is not None else None,
-                )
-                content[KEY_PORTNUM] = PORTNUM_TEXT
 
             return _reaction_prefix_meta, "m.room.message"
 
@@ -1386,14 +1163,12 @@ class MatrixRenderer:
         ctx: RenderingContext,
         content: dict[str, object],
     ) -> dict[str, object]:
-        """Attach provenance envelope and optional MMRelay metadata.
+        """Attach the provenance envelope to shared native renders.
 
         Shared by the thread/edit/plain native renders.  Returns the
         result-metadata dict (renderer name + operation kind).
         """
         self._embed_metadata(event, ctx, content)
-        if self._get_mmrelay_compat(event):
-            self._inject_mmrelay_metadata(event, content, ctx.source_origin_label)
         metadata: dict[str, object] = {
             "renderer": self.name,
             "matrix_operation": "send_event",
@@ -1473,49 +1248,6 @@ class MatrixRenderer:
         prefix, metadata = self._format_matrix_prefix(event, target_adapter, ctx)
         return f"{prefix}{body}", metadata
 
-    # ------------------------------------------------------------------
-    # mmrelay compatibility
-    # ------------------------------------------------------------------
-
-    def _inject_mmrelay_metadata(
-        self,
-        event: CanonicalEvent,
-        content: dict[str, object],
-        ctx_source_origin_label: str | None = None,
-    ) -> None:
-        """Embed mmrelay-compatible mesh metadata into *content*.
-
-        When mmrelay compatibility is enabled, the Matrix content payload
-        is augmented with wire-format keys that mirror the fields mmrelay
-        consumers expect.  The key names come from
-        :mod:`medre.interop.mmrelay` so that the wire contract lives
-        outside any single adapter.
-
-        Injected keys (see :mod:`medre.interop.mmrelay` for names):
-
-        * packet ID from native metadata.
-        * sender long name from native metadata.
-        * sender short name from native metadata.
-        * mesh network name derived from origin-label logic.
-        * hardcoded ``"TEXT_MESSAGE_APP"`` port number.
-        * message body/text from the event payload.
-        """
-        native_data: dict[str, object] = {}
-        if event.metadata and event.metadata.native:
-            native_data = dict(event.metadata.native.data)
-
-        text = source_text(event.payload)
-
-        content[KEY_ID] = self._resolve_mmrelay_packet_id(native_data)
-        _longname, _shortname = self._resolve_mmrelay_sender_names(native_data)
-        content[KEY_LONGNAME] = _longname
-        content[KEY_SHORTNAME] = _shortname
-        content[KEY_MESHNET] = self._resolve_mmrelay_meshnet(
-            event, ctx_source_origin_label
-        )
-        content[KEY_PORTNUM] = PORTNUM_TEXT
-        content[KEY_TEXT] = text
-
 
 def build_matrix_renderer(
     *,
@@ -1523,7 +1255,11 @@ def build_matrix_renderer(
     all_runtime_configs: Mapping[str, Mapping[str, Any]],
     source_attribution: Mapping[str, Any],
 ) -> MatrixRenderer | None:
-    """Build the registered Matrix renderer for runtime assembly."""
+    """Build the registered Matrix renderer for runtime assembly.
+
+    ``all_runtime_configs`` is part of the core renderer-factory contract;
+    the renderer no longer consumes source-adapter configs from it.
+    """
     from medre.config.adapters.matrix import MatrixConfig
 
     configs: dict[str, MatrixConfig] = {}
@@ -1538,16 +1274,7 @@ def build_matrix_renderer(
     if not configs:
         return None
 
-    source_configs: dict[str, Any] = {}
-    for rtc in all_runtime_configs.get("meshtastic", {}).values():
-        if not getattr(rtc, "enabled", False):
-            continue
-        config = getattr(rtc, "config", None)
-        if config is not None:
-            source_configs[rtc.adapter_id] = config
-
     return MatrixRenderer(
-        source_configs=source_configs,
         source_attribution=dict(source_attribution),
         configs=configs,
     )

@@ -7,8 +7,7 @@ fall back to native sender identity. Nonprintable names use the identity fallbac
 
 A configured string MUST take precedence; `relay_prefix: ""` MUST disable the
 prefix. The same visible attribution MUST appear in plain and HTML bodies, with
-HTML escaped as content. Automatic prefixes MUST NOT rewrite canonical payloads
-or MMRelay's `meshtastic_text`, long-name, short-name or packet metadata.
+HTML escaped as content. Automatic prefixes MUST NOT rewrite canonical payloads.
 Reaction emote fallbacks share this policy; native reactions retain native wire
 semantics. Configured output budgets still apply after complete composition.
 
@@ -20,12 +19,6 @@ a Matrix relation from a canonical ID, a different adapter, or another room.
 The renderer MUST record the `relation_reply` fallback and preserve reply
 precedence when another relation appears first. This fallback MUST NOT change
 the stored event, its relation tuple, or its source attribution.
-
-When MMRelay interoperability is enabled for the source, an unbound reply MUST
-retain its supplied `meshtastic_replyId` independently of the Matrix-native
-relation. Relation metadata takes precedence over the native interop field.
-Absent compatibility metadata MUST NOT be replaced with a canonical ID or a
-foreign native reference. The original `meshtastic_text` MUST remain unchanged.
 
 ## Text presentation
 

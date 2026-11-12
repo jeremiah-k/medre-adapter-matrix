@@ -1,11 +1,10 @@
-"""Default visible attribution follows the MMRelay presentation contract."""
+"""Default visible attribution brackets full sender origin in Matrix bodies."""
 
 from datetime import datetime, timezone
 from dataclasses import replace
 import pytest
 from medre.core.events import CanonicalEvent, EventMetadata, NativeMetadata
 from medre.core.rendering.renderer import RenderingContext
-from types import SimpleNamespace
 from medre.adapters.matrix.renderer import MatrixRenderer
 from medre.config.adapters.matrix import MatrixConfig
 
@@ -40,19 +39,12 @@ def renderer(monkeypatch):
             "source_platform": "meshtastic",
         },
     )
-    # Native source readers are provider-owned too. The isolated Matrix CI
-    # environment deliberately has no Meshtastic provider installed.
-    monkeypatch.setattr(
-        "medre.adapters.matrix.renderer.current_native_namespace",
-        lambda data, transport: data.get(transport, {}),
-    )
     return MatrixRenderer(
         configs={
             "target": MatrixConfig(
                 "target", "https://example.org", "@relay:example.org"
             )
         },
-        source_configs={"source": SimpleNamespace(mmrelay_compatibility=True)},
     )
 
 
@@ -82,8 +74,7 @@ async def test_default_preserves_full_sender_origin_and_html(renderer, origin, p
     content = result.payload["_matrix_operation"]["content"]
     assert content["body"] == prefix + "Testing from medre"
     assert prefix in content["formatted_body"]
-    assert content["meshtastic_text"] == "Testing from medre"
-    assert content["meshtastic_longname"] == "❄️TadChilly🏂"
+    assert not any(key.startswith("meshtastic_") for key in content)
 
 
 @pytest.mark.parametrize(
