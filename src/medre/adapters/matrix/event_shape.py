@@ -5,8 +5,8 @@ identity, relation, media, relay, and crypto provenance therefore lives under
 a versioned adapter-owned namespace in ``EventMetadata.native.data``.
 
 This module contains only pure projection helpers and imports no Matrix SDK.
-That keeps the shape reusable by external producers such as MMRelay without
-requiring MEDRE's runtime or mindroom-nio.
+That keeps the shape reusable by external producers without requiring MEDRE's
+runtime or mindroom-nio.
 """
 
 from __future__ import annotations
@@ -349,16 +349,3 @@ def matrix_namespace(native_data: Mapping[str, Any]) -> Mapping[str, Any]:
         MATRIX_NATIVE_NAMESPACE,
         MATRIX_NATIVE_SCHEMA_VERSION,
     )
-
-
-def mmrelay_interop_fields(native_data: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Return the MMRelay interop wire fields from native metadata.
-
-    Returns an empty mapping when the interop namespace is absent or
-    malformed, so callers can treat it as a fallback lookup source.
-    """
-    interop = native_data.get("interop")
-    if not isinstance(interop, Mapping):
-        return {}
-    mmrelay = interop.get("mmrelay")
-    return mmrelay if isinstance(mmrelay, Mapping) else {}

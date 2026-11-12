@@ -155,7 +155,7 @@ def build_matrix_metadata_content(
     context. Provider-native
     and custom metadata require explicit full mode; configuration and SDK
     objects are never inputs. The envelope is a relay hint, not authorization
-    or proof of delivery. MMRelay fields have their own independent opt-in.
+    or proof of delivery.
     """
     if mode not in {"off", "minimal", "safe", "full"}:
         raise ValueError(f"Unknown Matrix metadata embedding mode: {mode!r}")

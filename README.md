@@ -187,11 +187,12 @@ message references and normalized metadata, and `full` also includes provider
 native and custom metadata. Full mode exports those details deliberately;
 configuration and SDK objects are never embedded.
 
-Meshtastic's `mmrelay_compatibility` independently adds the legacy
-`meshtastic_*` Matrix content fields. Disable that flag and select `off` for
-content without relay metadata. Embedded provenance is an untrusted relay hint,
-not delivery evidence or authorization to operate on another message. The wire
-contract is [matrix-embedded-metadata.schema.json](docs/schemas/matrix-embedded-metadata.schema.json).
+Outbound Matrix content carries no legacy `meshtastic_*` fields; the embedded
+MEDRE namespace is the only relay metadata surface, and selecting
+`metadata_embedding_mode: off` yields content without it. Embedded provenance
+is an untrusted relay hint, not delivery evidence or authorization to operate
+on another message. The wire contract is
+[matrix-embedded-metadata.schema.json](docs/schemas/matrix-embedded-metadata.schema.json).
 
 ## Tests
 

@@ -6,8 +6,8 @@ Locks the current target-selection contracts:
 * Reply target: ``_matrix_target_event_id`` returns the native event ID only
   when ``target_native_ref.adapter == target_adapter`` and
   ``native_message_id`` is non-empty.  Cross-adapter refs are rejected.
-* Reaction target: true ``m.reaction`` when a Matrix-native target exists and
-  mmrelay_compat is off; ``m.emote`` fallback otherwise.
+* Reaction target: true ``m.reaction`` when a Matrix-native target exists;
+  ``m.emote`` fallback otherwise.
 * Missing target (empty relations): renders plain ``m.text`` with no
   ``m.relates_to``.
 * Stale / non-existent native target: the renderer emits the ID without

@@ -37,25 +37,21 @@ missing provenance is never filled in with invented empty strings. Unknown
 fields are omitted, and malformed known fields cause the relay hint to be
 discarded while the Matrix message is still decoded.
 
-## No MMRelay-specific native namespace in 0.1.0
+## No relay-specific native namespace in 0.1.0
 
 The normative `matrix-native-metadata.schema.json` freezes only `native.matrix`.
 A producer's source identity, native message/channel references, and reply or
 reaction relationship belong to MEDRE's generic `CanonicalEvent`, `NativeRef`,
-`EventRelation` and bounded `bridge_context`, not `native.interop.mmrelay`.
-Matrix-specific native metadata continues to describe the Matrix event that
-was observed. Flat `meshtastic_*` content keys are not part of this frozen
-contract, do not replace the authored Matrix body, and are not projected into
-canonical native metadata.
+`EventRelation` and bounded `bridge_context`, not any relay-specific sidecar
+namespace. Matrix-specific native metadata continues to describe the Matrix
+event that was observed. Flat `meshtastic_*` content keys are not part of this
+frozen contract, do not replace the authored Matrix body, and are not projected
+into canonical native metadata. An untrusted wire claim, even a structurally
+valid MEDRE `bridge_context`, confers no authorship, reaction-target, or
+mutation authority.
 
-This contract removal is **not** the MMRelay 1.5 producer/consumer migration.
-MMRelay must stop emitting flat keys and accept canonical metadata only from
-self or explicit globally allowlisted peer MXIDs in its independently reviewed
-release branch. An untrusted wire claim, even a structurally valid MEDRE
-`bridge_context`, confers no authorship, reaction-target, or mutation authority.
-
-The Matrix renderer's older explicitly enabled wire-compatibility code is not
-part of this native metadata contract; it must not be enabled by 1.5 relays.
+The Matrix renderer emits canonical metadata only; the retired opt-in
+wire-compatibility surface has been removed and must not be reintroduced.
 
 ## Git checkout line endings
 

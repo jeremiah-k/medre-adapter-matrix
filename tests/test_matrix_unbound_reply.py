@@ -1,7 +1,6 @@
 """Missing native parents retain readable context and reply precedence."""
 
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import pytest
 
@@ -60,13 +59,12 @@ async def test_unbound_reply_preserves_answer_and_context_without_native_relatio
 
 
 @pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
-@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize(
-    "relation_id, wire_id, expected",
-    [(42, "55", "42"), (None, "55", "55"), ("", 0, "0"), (None, None, None)],
+    "relation_id, wire_id",
+    [(42, "55"), (None, "55"), ("", 0), (None, None)],
 )
-async def test_unbound_reply_keeps_opt_in_mmrelay_identity(
-    strategy, enabled, relation_id, wire_id, expected
+async def test_unbound_reply_never_emits_legacy_identity(
+    strategy, relation_id, wire_id
 ):
     reply = EventRelation(
         "reply",
@@ -94,19 +92,12 @@ async def test_unbound_reply_keeps_opt_in_mmrelay_identity(
             )
         ),
     )
-    renderer = MatrixRenderer(
-        source_configs={"radio": SimpleNamespace(mmrelay_compatibility=enabled)}
-    )
+    renderer = MatrixRenderer()
     result = await renderer.render(
         event, RenderingContext(strategy, "matrix", "!room:example.org", "matrix")
     )
     content = result.payload["_matrix_operation"]["content"]
     assert "m.relates_to" not in content
     assert content["body"] == "[replying to: parent café 🦉] answer café 🦉"
-    if enabled and expected is not None:
-        assert content["meshtastic_replyId"] == expected
-    else:
-        assert "meshtastic_replyId" not in content
-    if enabled:
-        assert content["meshtastic_text"] == "answer café 🦉"
+    assert not any(key.startswith("meshtastic_") for key in content)
     assert event.relations == (reply,) and event.payload["body"] == "answer café 🦉"
