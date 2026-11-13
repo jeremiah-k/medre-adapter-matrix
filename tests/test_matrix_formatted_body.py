@@ -5,8 +5,8 @@ Covers:
 - Outbound: all messages include ``format`` and ``formatted_body``
 - Outbound: HTML escaping and newline conversion in formatted_body
 - Outbound: fallback-text strategy includes formatted_body
-- Outbound: reaction emote fallback updates formatted_body
-- Outbound: true m.reaction clears formatted_body
+- Outbound: reaction emote deliveries update formatted_body (described
+  emotes even when the target resolves)
 - Inbound: formatted_body extracted from Matrix event content into native_data
 - Inbound: events without formatted_body do not pollute native_data
 - Inbound: format field also extracted when present
@@ -226,8 +226,15 @@ class TestOutboundFormattedBody:
         assert not fb.startswith("<p><br/>")
         assert "<br/><br/>" not in fb
 
-    async def test_true_m_reaction_clears_formatted_body(self) -> None:
-        """True m.reaction events must not carry format or formatted_body."""
+    async def test_resolved_target_reaction_is_described_emote_with_formatted_body(
+        self,
+    ) -> None:
+        """Delivered reactions are described emotes even with a resolved target.
+
+        A resolvable Matrix-native target never produces a native
+        ``m.reaction`` annotation: the reaction renders as an ``m.emote``
+        room message whose formatted body matches the described wording.
+        """
         renderer = MatrixRenderer()
         relation = EventRelation(
             relation_type="reaction",
@@ -249,12 +256,15 @@ class TestOutboundFormattedBody:
             RenderingContext(target_adapter="matrix-1", delivery_strategy="direct"),
         )
         operation = result.payload["_matrix_operation"]
-        assert operation["event_type"] == "m.reaction"
+        assert operation["event_type"] == "m.room.message"
         content = _payload_content(result)
-        assert "format" not in content
-        assert "formatted_body" not in content
-        assert "msgtype" not in content
-        assert "body" not in content
+        assert content["msgtype"] == "m.emote"
+        assert "m.relates_to" not in content
+        assert "format" in content
+        assert "formatted_body" in content
+        fb = content["formatted_body"]
+        assert "<p>" in fb
+        assert "reacted 👍 to an earlier message" in fb
 
 
 # ===================================================================

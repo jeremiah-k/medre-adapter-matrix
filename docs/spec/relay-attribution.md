@@ -8,8 +8,9 @@ fall back to native sender identity. Nonprintable names use the identity fallbac
 A configured string MUST take precedence; `relay_prefix: ""` MUST disable the
 prefix. The same visible attribution MUST appear in plain and HTML bodies, with
 HTML escaped as content. Automatic prefixes MUST NOT rewrite canonical payloads.
-Reaction emote fallbacks share this policy; native reactions retain native wire
-semantics. Configured output budgets still apply after complete composition.
+Reaction deliveries share this policy: every delivered reaction is a described
+emote message carrying the source attribution, never a native annotation.
+Configured output budgets still apply after complete composition.
 
 ## Unbound reply context
 

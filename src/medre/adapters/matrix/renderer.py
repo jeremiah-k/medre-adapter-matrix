@@ -12,10 +12,9 @@ pipeline populates the adapter's platform as ``"matrix"``, the renderer
 matches on that platform string directly.
 
 **Supported relation types**: text messages, native replies, native
-threads, native edits (``m.replace``), and reactions (true
-``m.reaction`` when the target resolves to this destination, else an
-``m.emote`` fallback message).  Native deletes render as
-``redact_event`` operations.
+threads, native edits (``m.replace``), and reactions (always a
+described ``m.emote`` message — see :meth:`MatrixRenderer._render_reaction`).
+Native deletes render as ``redact_event`` operations.
 
 Every native render emits a closed
 :class:`~medre.adapters.matrix.outbound.MatrixOutboundOperation`
@@ -242,25 +241,30 @@ class MatrixRenderer:
 
         The rendered payload includes:
 
-        * ``msgtype``: ``"m.text"`` (or ``"m.emote"`` for reaction fallback)
+        * ``msgtype``: ``"m.text"`` (or ``"m.emote"`` for reactions)
         * ``body``: extracted text from the event payload
         * ``medre.envelope``: provenance metadata
-        * ``m.relates_to``: added for replies and reactions (native mode only)
+        * ``m.relates_to``: added for replies
 
         **Strategy fallback** — when ``ctx.delivery_strategy`` is
-        ``"fallback_text"``, relation semantics are degraded into plain
-        text within the Matrix payload body.  Native ``m.relates_to``
-        fields are **not** emitted.  The body is produced using the same
-        deterministic wording as
+        ``"fallback_text"``, relation semantics other than reactions are
+        degraded into plain text within the Matrix payload body.  Native
+        ``m.relates_to`` fields are **not** emitted.  The body is
+        produced using the same deterministic wording as
         :class:`~medre.core.rendering.text.TextRenderer` so that relation
         information is preserved as readable text.  The result carries
         ``fallback_applied="strategy_fallback_text"``.
 
+        **Reactions** — every delivered reaction crosses a network
+        boundary and is emitted through the bridge's own session
+        identity, so reactions always render as described ``m.emote``
+        messages regardless of delivery strategy or target resolution: a
+        native ``m.reaction`` annotation would carry the bridge identity
+        instead of the reacting source user, and Matrix annotation
+        idempotency would collapse same-key reactions from different
+        source users into one event.  See :meth:`_render_reaction`.
+
         **Native / direct mode** — replies preserve ``m.in_reply_to``.
-        Reactions render as true ``m.reaction`` events when the target
-        resolves to a Matrix-native id owned by this destination; when
-        the target is missing or foreign, an ``m.emote`` fallback
-        message is rendered instead.
 
         Threads render as native ``m.thread`` events rooted at the bound
         destination thread root.  Edits render ``m.replace`` /
@@ -295,21 +299,40 @@ class MatrixRenderer:
         delivery_strategy = ctx.delivery_strategy
         is_fallback = delivery_strategy == "fallback_text"
 
-        # ------------------------------------------------------------------
-        # Fallback-text path: degrade relations into plain text body
-        # ------------------------------------------------------------------
-        if is_fallback:
-            return self._render_fallback_text(event, ctx)
-
-        # ------------------------------------------------------------------
-        # Native / direct path
-        # ------------------------------------------------------------------
         relations = event.relations
         edit_rel = _find_relation(relations, "edit")
         delete_rel = _find_relation(relations, "delete")
         thread_rel = _find_relation(relations, "thread")
         reply_rel = _find_relation(relations, "reply")
         reaction_rel = _find_relation(relations, "reaction")
+
+        # A reaction is effective only when no higher-precedence relation
+        # claims the event: mutations, media, and threads return before
+        # reaction handling, and a reply wins the remaining tie
+        # deterministically.  An effective reaction renders as a described
+        # emote in BOTH delivery strategies — see _render_reaction.
+        selected_reaction = (
+            reaction_rel
+            if (
+                reaction_rel is not None
+                and reply_rel is None
+                and edit_rel is None
+                and delete_rel is None
+                and thread_rel is None
+                and event.event_kind != EventKind.MESSAGE_FILE
+            )
+            else None
+        )
+
+        # ------------------------------------------------------------------
+        # Fallback-text path: degrade relations into plain text body
+        # ------------------------------------------------------------------
+        if is_fallback and selected_reaction is None:
+            return self._render_fallback_text(event, ctx)
+
+        # ------------------------------------------------------------------
+        # Native / direct path (described reactions in any strategy)
+        # ------------------------------------------------------------------
 
         # Mutations are fail-closed operations: they either render as
         # authorized native mutations or raise — never ordinary messages.
@@ -343,17 +366,13 @@ class MatrixRenderer:
 
         body = source_text(event.payload)
 
-        # Determine if a reaction relation is present before applying the
-        # body-level prefix — reactions manage their own prefix metadata.
-        # Reply/reaction tuple order is incidental.  A reply takes
-        # precedence when both relations are present; otherwise render the
-        # reaction independent of where it appears in the tuple.
-        selected_reaction = reaction_rel if reply_rel is None else None
+        # Reactions manage their own prefix metadata inside the described
+        # emote body; every other shape carries the body-level relay
+        # prefix.
         _is_reaction = selected_reaction is not None
 
         # Apply relay prefix for mesh→Matrix direction (skip for reactions;
-        # reactions produce their own prefix in the emote fallback body or
-        # discard it entirely for true m.reaction annotations).
+        # reactions produce their own prefix in the described emote body).
         reaction_prefix_meta: dict[str, object] = {}
         if _is_reaction:
             prefix_meta: dict[str, object] = {}
@@ -369,11 +388,15 @@ class MatrixRenderer:
             "formatted_body": render_payload(event.payload, body)
             or self._text_to_html(body),
         }
-        event_type = "m.room.message"
+
+        truncated = False
+        truncation_meta: dict[str, object] = {}
 
         # Handle relations — reply and reaction.  Relation tuple order is
         # incidental; mutation/thread cases were handled above and reply wins
-        # the remaining tie deterministically.
+        # the remaining tie deterministically.  The send event type is always
+        # ``m.room.message``: reactions are described emote messages, so no
+        # branch varies the event type.
         if reply_rel is not None:
             rel = reply_rel
             mx_event_id = self._matrix_target_event_id(
@@ -391,13 +414,26 @@ class MatrixRenderer:
                 }
 
         elif selected_reaction is not None:
-            reaction_prefix_meta, event_type = self._render_reaction(
+            reaction_prefix_meta = self._render_reaction(
                 selected_reaction,
                 content,
                 target_adapter,
                 event,
                 ctx,
             )
+            # Reactions bypass the ordinary fallback-text renderer.  Apply
+            # both budgets to their complete attributed body, including the
+            # intentional emote line break, before building HTML or metadata.
+            described_body = content["body"]
+            assert isinstance(described_body, str)
+            bounded_body, truncated, truncation_meta = self._bound_rendered_body(
+                described_body, ctx
+            )
+            content["body"] = bounded_body
+            # The first two characters are the emote's presentation break
+            # ("\n "), encoded by the HTML paragraph boundary instead.
+            # Truncation may leave only part of that prefix.
+            content["formatted_body"] = self._text_to_html(bounded_body[2:])
 
         # Embed metadata envelope
         self._embed_metadata(event, ctx, content)
@@ -408,9 +444,10 @@ class MatrixRenderer:
         }
         metadata.update(prefix_meta)
         metadata.update(reaction_prefix_meta)
+        metadata.update(truncation_meta)
         self._note_rendered_text(metadata, content)
 
-        operation = MatrixOutboundOperation.send_event(event_type, content)
+        operation = MatrixOutboundOperation.send_event("m.room.message", content)
 
         return RenderingResult(
             event_id=event.event_id,
@@ -418,12 +455,45 @@ class MatrixRenderer:
             target_channel=target_channel,
             payload=operation.to_payload(),
             metadata=metadata,
-            fallback_applied=None,
+            truncated=truncated,
+            fallback_applied=(
+                "strategy_fallback_text" if _is_reaction and is_fallback else None
+            ),
         )
 
     # ------------------------------------------------------------------
     # Fallback-text rendering
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _bound_rendered_body(
+        body: str, ctx: RenderingContext
+    ) -> tuple[str, bool, dict[str, object]]:
+        """Limit the final wire body by characters, then by UTF-8 bytes.
+
+        Return the bounded text and the same truncation evidence for plain
+        fallback messages and attributed reaction emotes.
+        """
+        original_length = len(body)
+        original_text_bytes = len(body.encode("utf-8"))
+        truncated = False
+        if ctx.max_text_chars is not None:
+            body, truncated = truncate_text(body, max_text_chars=ctx.max_text_chars)
+        if ctx.max_text_bytes is not None:
+            body, byte_truncated, _, _ = truncate_text_bytes(
+                body, max_text_bytes=ctx.max_text_bytes
+            )
+            truncated = truncated or byte_truncated
+        metadata: dict[str, object] = {}
+        if truncated:
+            metadata.update(
+                original_length=original_length,
+                original_text_bytes=original_text_bytes,
+                rendered_text_bytes=len(body.encode("utf-8")),
+            )
+            if ctx.max_text_bytes is not None:
+                metadata["max_text_bytes"] = ctx.max_text_bytes
+        return body, truncated, metadata
 
     def _render_fallback_text(
         self,
@@ -456,25 +526,9 @@ class MatrixRenderer:
             event, degraded_text, ctx.target_adapter, ctx
         )
 
-        # Truncate the final body (including relay prefix) when the
-        # context imposes a text budget.
-        truncated = False
-        original_length = len(body)
-        original_text_bytes = len(body.encode("utf-8"))
-        if ctx.max_text_chars is not None:
-            body, truncated = truncate_text(
-                body,
-                max_text_chars=ctx.max_text_chars,
-            )
-        # Byte-safe truncation when a byte budget is configured.
-        if ctx.max_text_bytes is not None:
-            body, byte_truncated, _orig_bytes, _rendered_bytes = truncate_text_bytes(
-                body,
-                max_text_bytes=ctx.max_text_bytes,
-            )
-            if byte_truncated:
-                truncated = True
-        rendered_text_bytes = len(body.encode("utf-8"))
+        # Limit the final body after adding attribution, just as for
+        # described reaction emotes.
+        body, truncated, truncation_meta = self._bound_rendered_body(body, ctx)
 
         content: dict[str, object] = {
             "msgtype": "m.text",
@@ -491,13 +545,8 @@ class MatrixRenderer:
             "matrix_operation": "send_event",
         }
         result_metadata.update(prefix_meta)
+        result_metadata.update(truncation_meta)
         self._note_rendered_text(result_metadata, content)
-        if truncated:
-            result_metadata["original_length"] = original_length
-            result_metadata["original_text_bytes"] = original_text_bytes
-            result_metadata["rendered_text_bytes"] = rendered_text_bytes
-            if ctx.max_text_bytes is not None:
-                result_metadata["max_text_bytes"] = ctx.max_text_bytes
 
         operation = MatrixOutboundOperation.send_event("m.room.message", content)
 
@@ -570,11 +619,8 @@ class MatrixRenderer:
 
     @staticmethod
     def _abbreviate_text(text: str, max_len: int = 40) -> str:
-        """Normalise newlines to spaces and truncate with ``...`` when long."""
-        normalized = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-        # Collapse consecutive spaces from mixed line-ending replacement
-        while "  " in normalized:
-            normalized = normalized.replace("  ", " ")
+        """Collapse authored whitespace for a one-line reaction preview."""
+        normalized = " ".join(text.split())
         if len(normalized) > max_len:
             return normalized[:max_len] + "..."
         return normalized
@@ -648,85 +694,62 @@ class MatrixRenderer:
         target_adapter: str,
         event: CanonicalEvent,
         ctx: RenderingContext | None = None,
-    ) -> tuple[dict[str, object], str]:
-        """Render a reaction relation into the Matrix content dict.
+    ) -> dict[str, object]:
+        """Render a reaction relation into a described ``m.emote`` message.
 
-        When a Matrix-native target ID (owned by *target_adapter*) is
-        available, produces a true ``m.reaction`` event (the caller
-        emits it with event type ``"m.reaction"``).
-
-        When no Matrix-native target exists, falls back to an
-        ``m.emote`` ``m.room.message`` with the attribution prefix and
-        the target text preview.  The preview comes from canonical
-        relation enrichment; when the target text is genuinely
-        unresolvable the body says "an earlier message" instead of
-        quoting an empty string.
+        Every delivered reaction crosses a network boundary and is
+        emitted through the bridge's own session identity, so a native
+        ``m.reaction`` annotation is never attribution-correct: it would
+        carry the bridge identity (the reacting source user's name
+        vanishes) and Matrix annotation idempotency would collapse
+        same-key reactions from different source users into one event.
+        The described body instead carries the attribution prefix, the
+        exact reaction key, and the target text preview.  The preview
+        comes from canonical relation enrichment; when the target text
+        is genuinely unresolvable the body says "an earlier message"
+        instead of quoting an empty string.
 
         The canonical ``rel.target_event_id`` is **never** used as a
         Matrix event ID — it is an internal MEDRE canonical ID.
 
-        Returns a ``(reaction_prefix_meta, event_type)`` tuple.
-        ``reaction_prefix_meta`` is empty for true ``m.reaction``
-        annotations (no prefix metadata applies) and carries prefix
-        diagnostics for the emote fallback.
+        Returns the reaction prefix metadata (prefix diagnostics).  The
+        message is always emitted with event type ``m.room.message``.
         """
-        mx_event_id = self._matrix_target_event_id(
-            rel,
-            target_adapter,
-            ctx.target_channel if ctx is not None else None,
+        symbol = rel.key
+        original_text = self._abbreviate_text(self._extract_original_text(rel))
+        quoted = f'"{original_text}"' if original_text else "an earlier message"
+        prefix, reaction_prefix_meta = self._format_matrix_prefix(
+            event, target_adapter, ctx
         )
+        # A configured prefix must never contribute its own line break:
+        # any newline in it would stack a second blank line after the
+        # emote sender prefix. Normalize line breaks to spaces; spaces
+        # and tabs in the configured template are preserved.
+        prefix = prefix.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
 
-        if mx_event_id is not None:
-            # True Matrix reaction — emitted as an m.reaction event
-            # Remove default msgtype/body/format/formatted_body set at top of render()
-            content.pop("msgtype", None)
-            content.pop("body", None)
-            content.pop("format", None)
-            content.pop("formatted_body", None)
-            content["m.relates_to"] = {
-                "rel_type": "m.annotation",
-                "event_id": mx_event_id,
-                "key": rel.key,
-            }
-            # True m.reaction carries no prefix metadata — body is removed.
-            return {}, "m.reaction"
+        if not prefix or not prefix.strip():
+            visible_body = f"reacted {symbol} to {quoted}"
+        elif prefix[-1].isspace():
+            visible_body = f"{prefix}reacted {symbol} to {quoted}"
         else:
-            # Missing Matrix-native target → m.emote fallback
-            symbol = rel.key
-            original_text = self._abbreviate_text(self._extract_original_text(rel))
-            quoted = f'"{original_text}"' if original_text else "an earlier message"
-            prefix, _reaction_prefix_meta = self._format_matrix_prefix(
-                event, target_adapter, ctx
-            )
-            # A configured prefix must never contribute its own line break:
-            # any newline in it would stack a second blank line after the
-            # emote sender prefix. Normalize line breaks to spaces; spaces
-            # and tabs in the configured template are preserved.
-            prefix = prefix.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+            visible_body = f"{prefix} reacted {symbol} to {quoted}"
 
-            if not prefix or not prefix.strip():
-                visible_body = f"reacted {symbol} to {quoted}"
-            elif prefix[-1].isspace():
-                visible_body = f"{prefix}reacted {symbol} to {quoted}"
-            else:
-                visible_body = f"{prefix} reacted {symbol} to {quoted}"
+        # Exactly one intentional leading newline separates the reacted
+        # wording from the emote sender prefix in plain-text clients
+        # ("* Relay" then exactly one blank line). Stripping the composed
+        # wording keeps any configured prefix shape from leaving stray
+        # leading or trailing whitespace, so the single newline below is
+        # the only break at the start of the body. The HTML formatted
+        # body encodes that same break exactly once via its <p>
+        # boundary; deriving a <br/> from the newline stacked a second
+        # blank line, while removing the newline entirely lost the
+        # intended separation for text clients.
+        visible_body = visible_body.strip()
+        content["msgtype"] = "m.emote"
+        content["body"] = f"\n {visible_body}"
+        content["formatted_body"] = self._text_to_html(visible_body)
 
-            # Exactly one intentional leading newline separates the reacted
-            # wording from the emote sender prefix in plain-text clients
-            # ("* Relay" then exactly one blank line). Stripping the composed
-            # wording keeps any configured prefix shape from leaving stray
-            # leading or trailing whitespace, so the single newline below is
-            # the only break at the start of the body. The HTML formatted
-            # body encodes that same break exactly once via its <p>
-            # boundary; deriving a <br/> from the newline stacked a second
-            # blank line, while removing the newline entirely lost the
-            # intended separation for text clients.
-            visible_body = visible_body.strip()
-            content["msgtype"] = "m.emote"
-            content["body"] = f"\n {visible_body}"
-            content["formatted_body"] = self._text_to_html(visible_body)
-
-            return _reaction_prefix_meta, "m.room.message"
+        return reaction_prefix_meta
 
     # ------------------------------------------------------------------
     # Native thread / edit / delete rendering
@@ -1211,8 +1234,7 @@ class MatrixRenderer:
         The closed outbound envelope moves wire content off the payload
         top level, so the evidence extractor's payload-key fallback can no
         longer see the rendered body; renderer metadata is the supported
-        channel for these metrics.  True ``m.reaction`` annotations carry
-        no body and stay metric-free.
+        channel for these metrics.
         """
         body = content.get("body")
         if not isinstance(body, str):

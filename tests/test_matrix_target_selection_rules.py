@@ -6,8 +6,8 @@ Locks the current target-selection contracts:
 * Reply target: ``_matrix_target_event_id`` returns the native event ID only
   when ``target_native_ref.adapter == target_adapter`` and
   ``native_message_id`` is non-empty.  Cross-adapter refs are rejected.
-* Reaction target: true ``m.reaction`` when a Matrix-native target exists;
-  ``m.emote`` fallback otherwise.
+* Reaction delivery: always a described ``m.emote`` message — target
+  resolution never produces a native ``m.reaction`` annotation.
 * Missing target (empty relations): renders plain ``m.text`` with no
   ``m.relates_to``.
 * Stale / non-existent native target: the renderer emits the ID without
@@ -163,8 +163,14 @@ async def test_reply_with_empty_native_message_id_no_relates_to() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_reaction_true_m_reaction_when_native_target_exists() -> None:
-    """Reaction renders true m.reaction when Matrix-native target exists."""
+async def test_reaction_with_resolvable_matrix_target_is_described_emote() -> None:
+    """A resolvable Matrix-native target still renders a described emote.
+
+    Delivered reactions are emitted through the bridge's own session
+    identity, so target resolution never produces a native ``m.reaction``
+    annotation — it would carry the bridge identity and collapse
+    same-key reactions from different source users.
+    """
     renderer = MatrixRenderer()
     event = _event(
         relations=(_reaction_rel(adapter=_TARGET, native_message_id="$mx-r1"),),
@@ -172,14 +178,35 @@ async def test_reaction_true_m_reaction_when_native_target_exists() -> None:
     )
     result = await renderer.render(event, _ctx())
 
-    assert result.payload["_matrix_operation"]["event_type"] == "m.reaction"
-    relates = _payload_content(result)["m.relates_to"]
-    assert relates["rel_type"] == "m.annotation"  # type: ignore[index]
-    assert relates["event_id"] == "$mx-r1"  # type: ignore[index]
+    operation = result.payload["_matrix_operation"]
+    assert operation["event_type"] == "m.room.message"
+    content = _payload_content(result)
+    assert "m.relates_to" not in content
+    assert "m.annotation" not in str(content)
+    assert content["msgtype"] == "m.emote"
+    body = content["body"]
+    assert body.startswith("\n reacted 👍 to")
+    assert len(body) - len(body.lstrip("\n")) == 1
 
 
-async def test_reaction_emote_fallback_when_no_native_target() -> None:
-    """Reaction falls back to m.emote when native ref is from a different adapter."""
+async def test_reaction_described_emote_under_fallback_strategy() -> None:
+    """The described emote is unconditional in the fallback_text strategy."""
+    renderer = MatrixRenderer()
+    event = _event(
+        relations=(_reaction_rel(adapter=_TARGET, native_message_id="$mx-r1"),),
+        payload={"body": "👍"},
+    )
+    result = await renderer.render(event, _ctx(delivery_strategy="fallback_text"))
+
+    operation = result.payload["_matrix_operation"]
+    assert operation["event_type"] == "m.room.message"
+    content = _payload_content(result)
+    assert "m.relates_to" not in content
+    assert content["msgtype"] == "m.emote"
+
+
+async def test_reaction_described_emote_when_ref_is_from_a_different_adapter() -> None:
+    """A reaction whose native ref belongs to another adapter renders the described emote."""
     renderer = MatrixRenderer()
     event = _event(
         relations=(_reaction_rel(adapter="other-radio", native_message_id="$mx-r2"),),
@@ -187,13 +214,12 @@ async def test_reaction_emote_fallback_when_no_native_target() -> None:
     )
     result = await renderer.render(event, _ctx())
 
-    # No true m.reaction; should be emote fallback
     assert result.payload["_matrix_operation"]["event_type"] == "m.room.message"
     assert _payload_content(result)["msgtype"] == "m.emote"
 
 
-async def test_reaction_emote_fallback_when_no_native_ref_at_all() -> None:
-    """Reaction with no target_native_ref falls back to m.emote."""
+async def test_reaction_described_emote_when_no_native_ref_at_all() -> None:
+    """A reaction with no target_native_ref renders the described emote."""
     renderer = MatrixRenderer()
     rel = EventRelation(
         relation_type="reaction",

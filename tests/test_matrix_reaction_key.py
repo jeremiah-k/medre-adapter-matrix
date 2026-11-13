@@ -49,12 +49,17 @@ async def test_missing_key_never_uses_body_or_payload_emoji(key, bound, strategy
 
 
 @pytest.mark.parametrize("key", ["🔥", "❤️", "👍🏽", " custom key "])
-async def test_native_reaction_preserves_exact_explicit_key(key):
+@pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
+async def test_described_reaction_preserves_exact_explicit_key(key, strategy):
     result = await MatrixRenderer().render(
         reaction(key, True),
-        RenderingContext("direct", "matrix", "!room:example.org", "matrix"),
+        RenderingContext(strategy, "matrix", "!room:example.org", "matrix"),
     )
-    assert result.payload["_matrix_operation"]["content"]["m.relates_to"]["key"] == key
+    operation = result.payload["_matrix_operation"]
+    assert operation["event_type"] == "m.room.message"
+    content = operation["content"]
+    assert "m.relates_to" not in content
+    assert f"reacted {key} to" in content["body"]
 
 
 @pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
