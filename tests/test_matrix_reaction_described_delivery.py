@@ -38,9 +38,7 @@ def _renderer_with_auto_prefix() -> MatrixRenderer:
     automatic attribution (``[{sender}]: ``)."""
     return MatrixRenderer(
         configs={
-            _TARGET: MatrixConfig(
-                _TARGET, "https://example.org", "@relay:example.org"
-            )
+            _TARGET: MatrixConfig(_TARGET, "https://example.org", "@relay:example.org")
         }
     )
 
