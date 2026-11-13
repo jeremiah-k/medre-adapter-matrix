@@ -237,3 +237,74 @@ async def test_target_resolution_does_not_leak_into_described_content() -> None:
     assert "$mx-relayed-1" not in content["body"]
     assert "$mx-relayed-1" not in content["formatted_body"]
     assert operation["event_type"] == "m.room.message"
+
+
+@pytest.mark.parametrize("delivery_strategy", ["direct", "fallback_text"])
+@pytest.mark.parametrize(
+    "max_text_chars,max_text_bytes",
+    [(32, None), (None, 30), (38, 30), (0, 0)],
+)
+async def test_described_reaction_respects_final_body_budgets(
+    delivery_strategy, max_text_chars, max_text_bytes
+) -> None:
+    """Limit the complete attributed body, not just the key or target preview."""
+    renderer = _renderer_with_auto_prefix()
+    event = _mesh_reaction("alice-mesh", key="🔥🔥🔥<&")
+    result = await renderer.render(
+        event,
+        RenderingContext(
+            delivery_strategy=delivery_strategy,
+            target_adapter=_TARGET,
+            target_platform="matrix",
+            target_channel=_ROOM,
+            max_text_chars=max_text_chars,
+            max_text_bytes=max_text_bytes,
+        ),
+    )
+    content = _payload_content(result)
+    body = content["body"]
+    assert content["msgtype"] == "m.emote"
+    assert result.payload["_matrix_operation"]["event_type"] == "m.room.message"
+    assert "m.relates_to" not in content
+    if max_text_chars is not None:
+        assert len(body) <= max_text_chars
+    if max_text_bytes is not None:
+        assert len(body.encode("utf-8")) <= max_text_bytes
+    assert result.truncated is True
+    assert result.fallback_applied == (
+        "strategy_fallback_text" if delivery_strategy == "fallback_text" else None
+    )
+    assert result.metadata["original_length"] > len(body)
+    assert result.metadata["original_text_bytes"] > len(body.encode("utf-8"))
+    assert result.metadata["rendered_text_chars"] == len(body)
+    assert result.metadata["rendered_text_bytes"] == len(body.encode("utf-8"))
+    if max_text_bytes is not None:
+        assert result.metadata["max_text_bytes"] == max_text_bytes
+    # Only the one intentional emote presentation break is omitted from HTML.
+    from html import escape
+
+    visible = body[2:] if body.startswith("\n ") else ""
+    assert content["formatted_body"] == (
+        "<p>" + escape(visible, quote=False).replace("\n", "<br/>") + "</p>"
+    )
+
+
+@pytest.mark.parametrize("delivery_strategy", ["direct", "fallback_text"])
+async def test_described_reaction_without_budgets_keeps_full_body(
+    delivery_strategy,
+) -> None:
+    """Unlimited described reactions preserve the exact key and preview."""
+    renderer = _renderer_with_auto_prefix()
+    result = await renderer.render(
+        _mesh_reaction("alice-mesh", key="🔥🔥<&"), _ctx(delivery_strategy)
+    )
+    content = _payload_content(result)
+    assert result.truncated is False
+    assert result.fallback_applied == (
+        "strategy_fallback_text" if delivery_strategy == "fallback_text" else None
+    )
+    assert "original_length" not in result.metadata
+    assert content["body"].startswith("\n [alice-mesh]: reacted 🔥🔥<& to")
+    assert content["formatted_body"].startswith(
+        "<p>[alice-mesh]: reacted 🔥🔥&lt;&amp; to"
+    )

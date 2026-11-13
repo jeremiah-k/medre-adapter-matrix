@@ -389,6 +389,9 @@ class MatrixRenderer:
             or self._text_to_html(body),
         }
 
+        truncated = False
+        truncation_meta: dict[str, object] = {}
+
         # Handle relations — reply and reaction.  Relation tuple order is
         # incidental; mutation/thread cases were handled above and reply wins
         # the remaining tie deterministically.  The send event type is always
@@ -418,6 +421,19 @@ class MatrixRenderer:
                 event,
                 ctx,
             )
+            # Reactions bypass the ordinary fallback-text renderer.  Apply
+            # both budgets to their complete attributed body, including the
+            # intentional emote line break, before building HTML or metadata.
+            described_body = content["body"]
+            assert isinstance(described_body, str)
+            bounded_body, truncated, truncation_meta = self._bound_rendered_body(
+                described_body, ctx
+            )
+            content["body"] = bounded_body
+            # The first two characters are the emote's presentation break
+            # ("\n "), encoded by the HTML paragraph boundary instead.
+            # Truncation may leave only part of that prefix.
+            content["formatted_body"] = self._text_to_html(bounded_body[2:])
 
         # Embed metadata envelope
         self._embed_metadata(event, ctx, content)
@@ -428,6 +444,7 @@ class MatrixRenderer:
         }
         metadata.update(prefix_meta)
         metadata.update(reaction_prefix_meta)
+        metadata.update(truncation_meta)
         self._note_rendered_text(metadata, content)
 
         operation = MatrixOutboundOperation.send_event("m.room.message", content)
@@ -438,12 +455,45 @@ class MatrixRenderer:
             target_channel=target_channel,
             payload=operation.to_payload(),
             metadata=metadata,
-            fallback_applied=None,
+            truncated=truncated,
+            fallback_applied=(
+                "strategy_fallback_text" if _is_reaction and is_fallback else None
+            ),
         )
 
     # ------------------------------------------------------------------
     # Fallback-text rendering
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _bound_rendered_body(
+        body: str, ctx: RenderingContext
+    ) -> tuple[str, bool, dict[str, object]]:
+        """Limit the final wire body by characters, then by UTF-8 bytes.
+
+        Return the bounded text and the same truncation evidence for plain
+        fallback messages and attributed reaction emotes.
+        """
+        original_length = len(body)
+        original_text_bytes = len(body.encode("utf-8"))
+        truncated = False
+        if ctx.max_text_chars is not None:
+            body, truncated = truncate_text(body, max_text_chars=ctx.max_text_chars)
+        if ctx.max_text_bytes is not None:
+            body, byte_truncated, _, _ = truncate_text_bytes(
+                body, max_text_bytes=ctx.max_text_bytes
+            )
+            truncated = truncated or byte_truncated
+        metadata: dict[str, object] = {}
+        if truncated:
+            metadata.update(
+                original_length=original_length,
+                original_text_bytes=original_text_bytes,
+                rendered_text_bytes=len(body.encode("utf-8")),
+            )
+            if ctx.max_text_bytes is not None:
+                metadata["max_text_bytes"] = ctx.max_text_bytes
+        return body, truncated, metadata
 
     def _render_fallback_text(
         self,
@@ -476,25 +526,9 @@ class MatrixRenderer:
             event, degraded_text, ctx.target_adapter, ctx
         )
 
-        # Truncate the final body (including relay prefix) when the
-        # context imposes a text budget.
-        truncated = False
-        original_length = len(body)
-        original_text_bytes = len(body.encode("utf-8"))
-        if ctx.max_text_chars is not None:
-            body, truncated = truncate_text(
-                body,
-                max_text_chars=ctx.max_text_chars,
-            )
-        # Byte-safe truncation when a byte budget is configured.
-        if ctx.max_text_bytes is not None:
-            body, byte_truncated, _orig_bytes, _rendered_bytes = truncate_text_bytes(
-                body,
-                max_text_bytes=ctx.max_text_bytes,
-            )
-            if byte_truncated:
-                truncated = True
-        rendered_text_bytes = len(body.encode("utf-8"))
+        # Limit the final body after adding attribution, just as for
+        # described reaction emotes.
+        body, truncated, truncation_meta = self._bound_rendered_body(body, ctx)
 
         content: dict[str, object] = {
             "msgtype": "m.text",
@@ -511,13 +545,8 @@ class MatrixRenderer:
             "matrix_operation": "send_event",
         }
         result_metadata.update(prefix_meta)
+        result_metadata.update(truncation_meta)
         self._note_rendered_text(result_metadata, content)
-        if truncated:
-            result_metadata["original_length"] = original_length
-            result_metadata["original_text_bytes"] = original_text_bytes
-            result_metadata["rendered_text_bytes"] = rendered_text_bytes
-            if ctx.max_text_bytes is not None:
-                result_metadata["max_text_bytes"] = ctx.max_text_bytes
 
         operation = MatrixOutboundOperation.send_event("m.room.message", content)
 
