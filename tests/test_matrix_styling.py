@@ -128,7 +128,7 @@ def event(payload, relations=()):
 )
 async def test_renderer_styles_content_without_styling_or_replacing_prefix(relations):
     payload = StyledText("hello 🦉", (TextSpan(0, 5, "strong"),)).to_payload()
-    payload["text"] = "incorrect legacy alias"
+    payload["text"] = "incorrect stale text"
     source = event(payload, relations)
     result = await MatrixRenderer().render(
         source, RenderingContext("direct", "matrix", "!room:test", "matrix")
@@ -136,7 +136,7 @@ async def test_renderer_styles_content_without_styling_or_replacing_prefix(relat
     rendered = result.payload["_matrix_operation"]["content"]
     assert rendered["body"].endswith("hello 🦉")
     assert "<strong>hello</strong>" in rendered["formatted_body"]
-    assert "incorrect legacy alias" not in rendered["body"]
+    assert "incorrect stale text" not in rendered["body"]
     assert source.payload["body"] == "hello 🦉"
 
 
@@ -196,14 +196,14 @@ def test_inline_prefix_cannot_turn_complete_line_blocks_into_partial_blocks():
     )
 
 
-async def test_relation_fallback_uses_styled_body_not_stale_legacy_text_alias():
+async def test_relation_fallback_uses_styled_body_not_stale_text_value():
     payload = StyledText("correct 🦉", (TextSpan(0, 7, "strong"),)).to_payload()
-    payload["text"] = "stale legacy alias"
+    payload["text"] = "stale text value"
     source = event(payload, (EventRelation("reply", "missing", None, None, "parent"),))
     result = await MatrixRenderer().render(
         source, RenderingContext("fallback_text", "matrix", "!room:test", "matrix")
     )
     content = result.payload["_matrix_operation"]["content"]
     assert "correct 🦉" in content["body"]
-    assert "stale legacy alias" not in content["body"]
+    assert "stale text value" not in content["body"]
     assert "<strong>" not in content["formatted_body"]
