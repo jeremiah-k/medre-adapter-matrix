@@ -879,12 +879,12 @@ class TestMatrixCapabilitiesEditsDeletes:
         caps = adapter._capabilities
         assert caps.replies == "native"
 
-    def test_reactions_native(self) -> None:
-        """reactions capability is 'native'."""
+    def test_reactions_fallback(self) -> None:
+        """reactions capability is 'fallback' — described deliveries only."""
         config = _make_matrix_config()
         adapter = MatrixAdapter(config)
         caps = adapter._capabilities
-        assert caps.reactions == "native"
+        assert caps.reactions == "fallback"
 
 
 # ---------------------------------------------------------------------------

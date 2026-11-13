@@ -8,7 +8,8 @@ closely enough for unit and integration tests.
 Capabilities
 ------------
 * text messaging
-* native replies, reactions, threads, edits, and deletes
+* native replies, threads, edits, and deletes
+* described (fallback) reactions
 * delivery receipts
 * no attachments
 
@@ -89,7 +90,7 @@ _FAKE_MATRIX_CAPABILITIES = AdapterCapabilities(
     title=False,
     replies="native",
     threads="native",
-    reactions="native",
+    reactions="fallback",
     edits="native",
     deletes="native",
     attachments=True,

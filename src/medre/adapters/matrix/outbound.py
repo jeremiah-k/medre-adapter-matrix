@@ -54,8 +54,8 @@ class MatrixOutboundOperation(msgspec.Struct, frozen=True, kw_only=True):
     kind:
         ``"send_event"`` or ``"redact_event"``.
     event_type:
-        Matrix event type for ``send_event`` (``"m.room.message"``,
-        ``"m.reaction"``, ...).  Must be ``None`` for ``redact_event``.
+        Matrix event type for ``send_event`` (``"m.room.message"``).
+        Must be ``None`` for ``redact_event``.
     content:
         Wire content dict for ``send_event``.  Must be ``None`` for
         ``redact_event``.  Contains no routing keys.
