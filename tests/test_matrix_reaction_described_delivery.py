@@ -308,3 +308,17 @@ async def test_described_reaction_without_budgets_keeps_full_body(
     assert content["formatted_body"].startswith(
         "<p>[alice-mesh]: reacted 🔥🔥&lt;&amp; to"
     )
+
+
+@pytest.mark.parametrize("delivery_strategy", ["direct", "fallback_text"])
+async def test_reaction_preview_matches_mmrelay_whitespace_flattening(
+    delivery_strategy,
+) -> None:
+    """Presentation previews collapse whitespace without changing canonical source text."""
+    preview = "  first\t\tword\r\nsecond\n third\u2003fourth  "
+    event = _mesh_reaction("alice-mesh", fallback_text=preview)
+    result = await _renderer_with_auto_prefix().render(event, _ctx(delivery_strategy))
+    content = _payload_content(result)
+    assert 'to "first word second third fourth"' in content["body"]
+    assert 'to "first word second third fourth"' in content["formatted_body"]
+    assert event.relations[0].fallback_text == preview

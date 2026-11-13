@@ -619,11 +619,8 @@ class MatrixRenderer:
 
     @staticmethod
     def _abbreviate_text(text: str, max_len: int = 40) -> str:
-        """Normalise newlines to spaces and truncate with ``...`` when long."""
-        normalized = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-        # Collapse consecutive spaces from mixed line-ending replacement
-        while "  " in normalized:
-            normalized = normalized.replace("  ", " ")
+        """Collapse authored whitespace for a one-line reaction preview."""
+        normalized = " ".join(text.split())
         if len(normalized) > max_len:
             return normalized[:max_len] + "..."
         return normalized
