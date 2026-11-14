@@ -33,7 +33,7 @@ def renderer(monkeypatch):
     monkeypatch.setattr(
         "medre.adapters.matrix.renderer.project_source_fields",
         lambda *a, **kw: {
-            "source_sender_label": "❄️TadChilly🏂",
+            "source_sender_label": "❄️BobSmith🏂",
             "source_sender_short_label": "🥶",
             "source_sender_id": "!9f098838",
             "source_platform": "meshtastic",
@@ -49,14 +49,14 @@ def renderer(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "origin,prefix", [("Forx", "[❄️TadChilly🏂/Forx]: "), ("", "[❄️TadChilly🏂]: ")]
+    "origin,prefix", [("Forx", "[❄️BobSmith🏂/Forx]: "), ("", "[❄️BobSmith🏂]: ")]
 )
 async def test_default_preserves_full_sender_origin_and_html(renderer, origin, prefix):
     event = message(
         {
             "meshtastic": {
                 "schema_version": 1,
-                "longname": "❄️TadChilly🏂",
+                "longname": "❄️BobSmith🏂",
                 "shortname": "🥶",
                 "packet_id": "496196763",
             }
