@@ -31,7 +31,6 @@ never degrades into an ordinary message.
 from __future__ import annotations
 
 from dataclasses import replace
-import msgspec
 from typing import Any, Mapping
 
 from .styling import render_payload, source_text
@@ -45,8 +44,14 @@ from medre.core.events.attachments import (
 from medre.core.events.kinds import EventKind
 from medre.core.rendering.attribution import (
     RelayAttribution,
-    build_relay_attribution,
+    resolve_relay_attribution,
     format_relay_prefix,
+)
+from medre.core.rendering.relations import (
+    degrade_relations_inline,
+    describe_reaction,
+    reaction_key,
+    destination_native_message_id,
 )
 from medre.core.rendering.renderer import (
     RenderingContext,
@@ -171,19 +176,6 @@ class MatrixRenderer:
         """
 
         source_info = self._source_attribution.get(event.source_adapter)
-        source_origin_label = (
-            getattr(source_info, "origin_label", None) if source_info else None
-        )
-        if ctx is not None and ctx.source_attribution is not None:
-            source = ctx.source_attribution
-            if source.source_origin_label is not None:
-                source_origin_label = source.source_origin_label
-            if ctx.source_origin_label is not None:
-                source_origin_label = ctx.source_origin_label
-            return replace(source, source_origin_label=source_origin_label)
-        if ctx is not None and ctx.source_origin_label is not None:
-            source_origin_label = ctx.source_origin_label
-
         native_data: dict[str, object] = {}
         if event.metadata and event.metadata.native:
             native_data = dict(event.metadata.native.data)
@@ -196,9 +188,11 @@ class MatrixRenderer:
             platform_hint=platform_hint,
         )
 
-        return build_relay_attribution(
+        return resolve_relay_attribution(
             event,
-            source_origin_label=source_origin_label,
+            source_origin_label=ctx.source_origin_label if ctx else None,
+            configured_origin_label=getattr(source_info, "origin_label", None),
+            source_attribution=ctx.source_attribution if ctx else None,
             projected_fields=projected,
         )
 
@@ -289,11 +283,9 @@ class MatrixRenderer:
         RenderingResult
             The rendered Matrix content dict wrapped in a result.
         """
-        reaction = _find_relation(event.relations, "reaction")
-        if reaction is not None and (
-            not isinstance(reaction.key, str) or not reaction.key.strip()
-        ):
-            raise ValueError("Canonical reaction requires an explicit nonempty key")
+        for relation in event.relations:
+            if relation.relation_type == "reaction":
+                reaction_key(relation)
         target_adapter = ctx.target_adapter
         target_channel = ctx.target_channel
         delivery_strategy = ctx.delivery_strategy
@@ -315,6 +307,7 @@ class MatrixRenderer:
             reaction_rel
             if (
                 reaction_rel is not None
+                and len(relations) == 1
                 and reply_rel is None
                 and edit_rel is None
                 and delete_rel is None
@@ -361,10 +354,14 @@ class MatrixRenderer:
             and self._matrix_target_event_id(reply_rel, target_adapter, target_channel)
             is None
         ):
-            result = self._render_fallback_text(event, ctx, reply_relation=reply_rel)
+            result = self._render_fallback_text(event, ctx)
             return replace(result, fallback_applied="relation_reply")
 
         body = source_text(event.payload)
+        if not selected_reaction and event.relations:
+            body = degrade_relations_inline(
+                event, body, represented=(reply_rel,) if reply_rel is not None else ()
+            )
 
         # Reactions manage their own prefix metadata inside the described
         # emote body; every other shape carries the body-level relay
@@ -435,6 +432,14 @@ class MatrixRenderer:
             # Truncation may leave only part of that prefix.
             content["formatted_body"] = self._text_to_html(bounded_body[2:])
 
+        if not _is_reaction:
+            bounded_body, truncated, truncation_meta = self._bound_rendered_body(
+                body, ctx
+            )
+            if truncated:
+                content["body"] = bounded_body
+                content["formatted_body"] = self._text_to_html(bounded_body)
+
         # Embed metadata envelope
         self._embed_metadata(event, ctx, content)
 
@@ -499,8 +504,6 @@ class MatrixRenderer:
         self,
         event: CanonicalEvent,
         ctx: RenderingContext,
-        *,
-        reply_relation: EventRelation | None = None,
     ) -> RenderingResult:
         """Render event with degraded relation text for fallback_text strategy.
 
@@ -512,13 +515,7 @@ class MatrixRenderer:
 
         Sets ``fallback_applied="strategy_fallback_text"`` on the result.
         """
-        # Reuse deterministic wording for degraded relations
-        text_event = (
-            msgspec.structs.replace(event, relations=(reply_relation,))
-            if reply_relation is not None
-            else event
-        )
-        degraded_text = extract_relation_text(text_event)
+        degraded_text = extract_relation_text(event)
 
         # Apply relay prefix for mesh→Matrix direction BEFORE truncation
         # so that the final body (prefix + text) respects the text budget.
@@ -581,49 +578,11 @@ class MatrixRenderer:
         event ID — it is an internal MEDRE canonical ID, not a Matrix
         event ID.
         """
-        ref = getattr(rel, "target_native_ref", None)
-        if ref is None:
-            return None
-        adapter = getattr(ref, "adapter", None)
-        if adapter != target_adapter:
-            return None
-        if (
-            target_channel is not None
-            and getattr(ref, "native_channel_id", None) != target_channel
-        ):
-            return None
-        mid = getattr(ref, "native_message_id", None)
-        return str(mid) if mid else None
+        return destination_native_message_id(rel, target_adapter, target_channel)
 
     # ------------------------------------------------------------------
     # Reaction helpers
     # ------------------------------------------------------------------
-
-    @staticmethod
-    def _extract_original_text(rel: EventRelation) -> str:
-        """Return the original message text preview for a reaction.
-
-        Preference order:
-
-        1. ``rel.metadata['original_text']`` (core relation enrichment)
-        2. ``rel.fallback_text`` (core relation enrichment)
-        3. Empty string — the caller renders an honest fallback
-        """
-        rel_meta = getattr(rel, "metadata", {}) or {}
-        text = rel_meta.get("original_text")
-        if text:
-            return str(text)
-        if rel.fallback_text:
-            return str(rel.fallback_text)
-        return ""
-
-    @staticmethod
-    def _abbreviate_text(text: str, max_len: int = 40) -> str:
-        """Collapse authored whitespace for a one-line reaction preview."""
-        normalized = " ".join(text.split())
-        if len(normalized) > max_len:
-            return normalized[:max_len] + "..."
-        return normalized
 
     def _format_matrix_prefix(
         self,
@@ -667,11 +626,8 @@ class MatrixRenderer:
             )
         fmt_result = format_relay_prefix(template, attr)
 
-        # On internal exception, return empty prefix (preserve safety).
-        if fmt_result.formatting_error and fmt_result.formatting_error.startswith(
-            "formatting_exception:"
-        ):
-            return "", {}
+        if fmt_result.formatting_error:
+            raise ValueError(f"Invalid relay_prefix: {fmt_result.formatting_error}")
 
         formatter_meta: dict[str, object] = {
             "relay_prefix_template": fmt_result.template_used,
@@ -715,9 +671,7 @@ class MatrixRenderer:
         Returns the reaction prefix metadata (prefix diagnostics).  The
         message is always emitted with event type ``m.room.message``.
         """
-        symbol = rel.key
-        original_text = self._abbreviate_text(self._extract_original_text(rel))
-        quoted = f'"{original_text}"' if original_text else "an earlier message"
+        description = describe_reaction(rel)
         prefix, reaction_prefix_meta = self._format_matrix_prefix(
             event, target_adapter, ctx
         )
@@ -728,11 +682,11 @@ class MatrixRenderer:
         prefix = prefix.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
 
         if not prefix or not prefix.strip():
-            visible_body = f"reacted {symbol} to {quoted}"
+            visible_body = description
         elif prefix[-1].isspace():
-            visible_body = f"{prefix}reacted {symbol} to {quoted}"
+            visible_body = f"{prefix}{description}"
         else:
-            visible_body = f"{prefix} reacted {symbol} to {quoted}"
+            visible_body = f"{prefix} {description}"
 
         # Exactly one intentional leading newline separates the reacted
         # wording from the emote sender prefix in plain-text clients
@@ -768,26 +722,11 @@ class MatrixRenderer:
         binding is honored when it confirms the same destination.  Source
         platform IDs and canonical event IDs are never returned.
         """
-        if rel is None:
-            return None
-        ref_id = MatrixRenderer._matrix_target_event_id(
-            rel, target_adapter, target_channel
+        return (
+            destination_native_message_id(rel, target_adapter, target_channel)
+            if rel is not None
+            else None
         )
-        if ref_id:
-            return ref_id
-        fact = getattr(rel, "target_fact", None)
-        if (
-            fact is not None
-            and getattr(fact, "status", None) in ("bound", "bound_owned")
-            and getattr(fact, "adapter", None) == target_adapter
-            and (
-                target_channel is None
-                or getattr(fact, "native_channel_id", None) == target_channel
-            )
-            and getattr(fact, "native_message_id", None)
-        ):
-            return str(fact.native_message_id)
-        return None
 
     @staticmethod
     def _require_bound_owned_target(
@@ -959,6 +898,7 @@ class MatrixRenderer:
                 event,
                 ctx,
                 reply_target_id=parent_id,
+                represented=(reply_rel,) if parent_id and reply_rel is not None else (),
             )
         if parent_id:
             relates_to: dict[str, object] = {
@@ -975,23 +915,33 @@ class MatrixRenderer:
                 "m.in_reply_to": {"event_id": root_id},
             }
 
-        body = source_text(event.payload)
+        body = degrade_relations_inline(
+            event,
+            source_text(event.payload),
+            represented=(thread_rel,)
+            + ((reply_rel,) if parent_id and reply_rel is not None else ()),
+        )
         body, prefix_meta = self._apply_matrix_relay_prefix(
             event, body, target_adapter, ctx
         )
 
+        body, truncated, truncation_meta = self._bound_rendered_body(body, ctx)
         content: dict[str, object] = {
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": render_payload(event.payload, body)
-            or self._text_to_html(body),
+            "formatted_body": (
+                self._text_to_html(body)
+                if truncated
+                else render_payload(event.payload, body) or self._text_to_html(body)
+            ),
             "m.relates_to": relates_to,
         }
 
         metadata = self._finalize_send_content(event, ctx, content)
 
         metadata.update(prefix_meta)
+        metadata.update(truncation_meta)
         metadata["matrix_thread_root"] = root_id
         if parent_id:
             metadata["matrix_thread_parent"] = parent_id
@@ -1003,6 +953,7 @@ class MatrixRenderer:
             target_channel=ctx.target_channel,
             payload=operation.to_payload(),
             metadata=metadata,
+            truncated=truncated,
             fallback_applied=None,
         )
 
@@ -1012,26 +963,34 @@ class MatrixRenderer:
         ctx: RenderingContext,
         *,
         reply_target_id: str | None = None,
+        represented: tuple[EventRelation, ...] = (),
     ) -> RenderingResult:
         """Render a plain message, optionally retaining one bound reply."""
         target_adapter = ctx.target_adapter
-        body = source_text(event.payload)
+        body = degrade_relations_inline(
+            event, source_text(event.payload), represented=represented
+        )
         body, prefix_meta = self._apply_matrix_relay_prefix(
             event, body, target_adapter, ctx
         )
 
+        body, truncated, truncation_meta = self._bound_rendered_body(body, ctx)
         content: dict[str, object] = {
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": render_payload(event.payload, body)
-            or self._text_to_html(body),
+            "formatted_body": (
+                self._text_to_html(body)
+                if truncated
+                else render_payload(event.payload, body) or self._text_to_html(body)
+            ),
         }
         if reply_target_id is not None:
             content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_target_id}}
 
         metadata = self._finalize_send_content(event, ctx, content)
         metadata.update(prefix_meta)
+        metadata.update(truncation_meta)
 
         operation = MatrixOutboundOperation.send_event("m.room.message", content)
         return RenderingResult(
@@ -1040,7 +999,8 @@ class MatrixRenderer:
             target_channel=ctx.target_channel,
             payload=operation.to_payload(),
             metadata=metadata,
-            fallback_applied=None,
+            truncated=truncated,
+            fallback_applied="relation_thread",
         )
 
     @staticmethod
