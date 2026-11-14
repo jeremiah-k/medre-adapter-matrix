@@ -191,10 +191,19 @@ async def test_native_mutation_requires_matching_kind_and_relation(kind, mutatio
 
 
 @pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
-async def test_relation_free_reaction_never_forwards_payload_body(strategy):
+@pytest.mark.parametrize("styled", [False, True])
+async def test_relation_free_reaction_never_forwards_payload_body(strategy, styled):
     from dataclasses import replace
 
     original = event("message.reacted", (), body="authored")
+    if styled:
+        from msgspec.structs import replace as replace_event
+        from medre.core.events.text import StyledText, TextSpan
+
+        original = replace_event(
+            original,
+            payload=StyledText("authored", (TextSpan(0, 8, "strong"),)).to_payload(),
+        )
     result = await MatrixRenderer().render(
         original, replace(context(), delivery_strategy=strategy)
     )
