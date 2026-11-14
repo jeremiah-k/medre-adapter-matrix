@@ -48,7 +48,7 @@ from medre.core.events.kinds import EventKind
 from medre.core.rendering.attribution import (
     RelayAttribution,
     resolve_relay_attribution,
-    format_relay_prefix,
+    format_checked_relay_prefix,
 )
 from medre.core.rendering.relations import (
     compose_relation_text,
@@ -653,7 +653,7 @@ class MatrixRenderer:
                 if attr.source_origin_label
                 else "[{sender}]: "
             )
-        fmt_result = format_relay_prefix(template, attr)
+        fmt_result = format_checked_relay_prefix(template, attr)
 
         if fmt_result.formatting_error:
             raise ValueError(f"Invalid relay_prefix: {fmt_result.formatting_error}")
