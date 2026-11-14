@@ -188,3 +188,17 @@ async def test_native_mutation_requires_matching_kind_and_relation(kind, mutatio
     with pytest.raises(MatrixNativeMutationError, match="event kind"):
         await MatrixRenderer().render(original, context())
     assert original.payload["body"] == "authored"
+
+
+@pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
+async def test_relation_free_reaction_never_forwards_payload_body(strategy):
+    from dataclasses import replace
+
+    original = event("message.reacted", (), body="authored")
+    result = await MatrixRenderer().render(
+        original, replace(context(), delivery_strategy=strategy)
+    )
+    content = MatrixOutboundOperation.from_payload(result.payload).content
+    assert content["body"] == "[reacted]"
+    assert "authored" not in content.get("formatted_body", "")
+    assert "m.relates_to" not in content

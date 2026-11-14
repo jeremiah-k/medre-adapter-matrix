@@ -379,7 +379,7 @@ class MatrixRenderer:
             return replace(result, fallback_applied="relation_reply")
 
         body = source_text(event.payload)
-        if not selected_reaction and event.relations:
+        if not selected_reaction:
             body = compose_relation_text(
                 event, body, represented=(reply_rel,) if reply_rel is not None else ()
             )
