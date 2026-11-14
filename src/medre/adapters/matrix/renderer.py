@@ -51,7 +51,7 @@ from medre.core.rendering.attribution import (
     format_relay_prefix,
 )
 from medre.core.rendering.relations import (
-    degrade_relations_inline,
+    compose_relation_text,
     describe_reaction,
     reaction_key,
     destination_native_message_id,
@@ -61,7 +61,7 @@ from medre.core.rendering.renderer import (
     RenderingResult,
 )
 from medre.core.rendering.text_helpers import (
-    extract_relation_text,
+    extract_event_text,
     truncate_text,
     truncate_text_bytes,
 )
@@ -380,7 +380,7 @@ class MatrixRenderer:
 
         body = source_text(event.payload)
         if not selected_reaction and event.relations:
-            body = degrade_relations_inline(
+            body = compose_relation_text(
                 event, body, represented=(reply_rel,) if reply_rel is not None else ()
             )
 
@@ -542,11 +542,9 @@ class MatrixRenderer:
             ordered = tuple(
                 sorted(event.relations, key=lambda rel: rel.relation_type != "reply")
             )
-            degraded_text = extract_relation_text(
-                replace_event(event, relations=ordered)
-            )
+            degraded_text = extract_event_text(replace_event(event, relations=ordered))
         else:
-            degraded_text = extract_relation_text(event)
+            degraded_text = extract_event_text(event)
 
         # Apply relay prefix for mesh→Matrix direction BEFORE truncation
         # so that the final body (prefix + text) respects the text budget.
@@ -877,7 +875,7 @@ class MatrixRenderer:
             for rel, native_id in ((thread_rel, root_id), (reply_rel, parent_id))
             if rel is not None and native_id is not None
         )
-        caption = degrade_relations_inline(event, caption, represented=represented)
+        caption = compose_relation_text(event, caption, represented=represented)
         caption, prefix_meta = self._apply_matrix_relay_prefix(
             event, caption, target_adapter, ctx
         )
@@ -957,7 +955,7 @@ class MatrixRenderer:
                 "m.in_reply_to": {"event_id": root_id},
             }
 
-        body = degrade_relations_inline(
+        body = compose_relation_text(
             event,
             source_text(event.payload),
             represented=(thread_rel,)
@@ -1009,7 +1007,7 @@ class MatrixRenderer:
     ) -> RenderingResult:
         """Render a plain message, optionally retaining one bound reply."""
         target_adapter = ctx.target_adapter
-        body = degrade_relations_inline(
+        body = compose_relation_text(
             event, source_text(event.payload), represented=represented
         )
         body, prefix_meta = self._apply_matrix_relay_prefix(
@@ -1114,7 +1112,7 @@ class MatrixRenderer:
             ctx.target_channel,
         )
 
-        new_text = degrade_relations_inline(
+        new_text = compose_relation_text(
             event, source_text(event.payload), represented=(edit_rel,)
         )
         # Exactly one relay attribution: applied once to the new body.
