@@ -323,6 +323,14 @@ class MatrixRenderer:
         if is_fallback and selected_reaction is None:
             return self._render_fallback_text(event, ctx)
 
+        mutations = [
+            rel for rel in relations if rel.relation_type in ("edit", "delete")
+        ]
+        if len(mutations) > 1:
+            raise MatrixNativeMutationError(
+                "native mutation refused: multiple mutation targets are ambiguous"
+            )
+
         # ------------------------------------------------------------------
         # Native / direct path (described reactions in any strategy)
         # ------------------------------------------------------------------
@@ -798,9 +806,6 @@ class MatrixRenderer:
         caption = str(event.payload.get("body", ""))
         if not caption and descriptor.filename:
             caption = descriptor.filename
-        caption, prefix_meta = self._apply_matrix_relay_prefix(
-            event, caption, target_adapter, ctx
-        )
 
         info: dict[str, object] = {"size": descriptor.size_bytes}
         if descriptor.mime_type:
@@ -844,8 +849,21 @@ class MatrixRenderer:
         elif parent_id:
             template["m.relates_to"] = {"m.in_reply_to": {"event_id": parent_id}}
 
+        represented = tuple(
+            rel
+            for rel, native_id in ((thread_rel, root_id), (reply_rel, parent_id))
+            if rel is not None and native_id is not None
+        )
+        caption = degrade_relations_inline(event, caption, represented=represented)
+        caption, prefix_meta = self._apply_matrix_relay_prefix(
+            event, caption, target_adapter, ctx
+        )
+        caption, truncated, truncation_meta = self._bound_rendered_body(caption, ctx)
+        template["body"] = caption
+
         metadata = self._finalize_send_content(event, ctx, template)
         metadata.update(prefix_meta)
+        metadata.update(truncation_meta)
         metadata["matrix_operation"] = "send_media"
         metadata["attachment_kind"] = descriptor.kind
 
@@ -858,6 +876,7 @@ class MatrixRenderer:
             target_channel=ctx.target_channel,
             payload=operation.to_payload(),
             metadata=metadata,
+            truncated=truncated,
             fallback_applied=None,
         )
 
@@ -1072,12 +1091,21 @@ class MatrixRenderer:
             ctx.target_channel,
         )
 
-        new_text = source_text(event.payload)
+        new_text = degrade_relations_inline(
+            event, source_text(event.payload), represented=(edit_rel,)
+        )
         # Exactly one relay attribution: applied once to the new body.
         new_body, prefix_meta = self._apply_matrix_relay_prefix(
             event, new_text, target_adapter, ctx
         )
         fallback_body = f"* {new_body}"
+
+        # A replacement is atomic: silently clipping it would change the
+        # requested edit. Both independently visible bodies must fit.
+        for rendered in (new_body, fallback_body):
+            _, truncated, _ = self._bound_rendered_body(rendered, ctx)
+            if truncated:
+                raise ValueError("Rendered Matrix edit exceeds the destination budget")
 
         new_content: dict[str, object] = {
             "msgtype": "m.text",

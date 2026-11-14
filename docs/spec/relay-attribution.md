@@ -37,3 +37,15 @@ plain presentation when their complete-line bounds cannot be preserved.
 Only supported semantic tags are emitted; source HTML attributes and arbitrary
 markup MUST NOT be forwarded. Formatting does not establish identity or change
 relation ownership, native metadata, or delivery confirmation.
+
+## Native text boundaries
+
+Media captions MUST describe relations that are not represented by native fields
+before final text-budget enforcement. Truncating a caption MUST NOT alter the
+retained content reference or filename metadata.
+
+Native text replacements MUST retain secondary relation descriptions without
+changing the authorized mutation target. Both the replacement and its visible
+`* ` fallback body MUST fit the destination text budgets; an oversized edit
+MUST be rejected rather than clipped. Multiple edit/delete targets MUST be
+rejected as ambiguous before constructing a native mutation.
