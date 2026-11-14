@@ -1110,13 +1110,13 @@ class TestDisplayNameNormalization:
         adapter.ctx = ctx
         adapter._started = True
 
-        event = _make_fake_nio_event(sender="@tad:example.com")
+        event = _make_fake_nio_event(sender="@bob:example.com")
         room = _make_fake_room(room_id="!room:server")
 
         await adapter._on_room_message(_to_event_dict(room, event))
         assert len(published) == 1
         ndata = published[0].metadata.native.data
-        assert ndata["matrix"]["sender_display_name"] == "@tad:example.com"
+        assert ndata["matrix"]["sender_display_name"] == "@bob:example.com"
 
     async def test_user_name_takes_precedence_over_users(self) -> None:
         """room.user_name(sender) takes precedence over room.users lookup."""
@@ -1126,7 +1126,7 @@ class TestDisplayNameNormalization:
         adapter.ctx = ctx
         adapter._started = True
 
-        event = _make_fake_nio_event(sender="@tad:example.com")
+        event = _make_fake_nio_event(sender="@bob:example.com")
         room = _make_fake_room(room_id="!room:server")
 
         await adapter._on_room_message(
@@ -1152,17 +1152,17 @@ class TestDisplayNameNormalization:
             "meshtastic_longname": "NodeLong",
             "meshtastic_shortname": "NSh",
         }
-        event = _make_fake_nio_event(sender="@tad:example.com", content=content)
+        event = _make_fake_nio_event(sender="@bob:example.com", content=content)
         room = _make_fake_room(room_id="!room:server")
 
         await adapter._on_room_message(
-            _to_event_dict(room, event, sender_display_name="Tad Chilly")
+            _to_event_dict(room, event, sender_display_name="Bob Smith")
         )
         assert len(published) == 1
         ndata = published[0].metadata.native.data
         assert set(ndata) == {"matrix"}
         # Matrix sender identity comes from the SDK room, not untrusted wire keys
-        assert ndata["matrix"]["sender_display_name"] == "Tad Chilly"
+        assert ndata["matrix"]["sender_display_name"] == "Bob Smith"
 
     # --- FIX 2: frozen metadata immutability after enrichment -----------
 
