@@ -130,3 +130,40 @@ async def test_native_mutation_rejects_multiple_targets(second):
             ),
             context(),
         )
+
+
+@pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
+async def test_single_reaction_on_authored_message_keeps_body(strategy):
+    from dataclasses import replace
+
+    original = event(
+        "message.created",
+        (relation("reaction", "$parent", "👍"),),
+        body="Please check this",
+    )
+    result = await MatrixRenderer().render(
+        original, replace(context(), delivery_strategy=strategy)
+    )
+    content = MatrixOutboundOperation.from_payload(result.payload).content
+    assert content["msgtype"] == "m.text"
+    assert content["body"] == "reacted 👍 to an earlier message Please check this"
+    assert "m.relates_to" not in content
+    assert original.payload["body"] == "Please check this"
+
+
+@pytest.mark.parametrize("strategy", ["direct", "fallback_text"])
+async def test_unbound_reply_description_has_budget_precedence(strategy):
+    from dataclasses import replace
+
+    original = event(
+        "message.created",
+        (relation("reaction", key="👍"), relation("reply")),
+        body="answer",
+    )
+    result = await MatrixRenderer().render(
+        original, replace(context(max_text_chars=31), delivery_strategy=strategy)
+    )
+    content = MatrixOutboundOperation.from_payload(result.payload).content
+    assert content["body"].startswith("[replying to: unknown message]")
+    assert result.truncated
+    assert original.relations[0].relation_type == "reaction"

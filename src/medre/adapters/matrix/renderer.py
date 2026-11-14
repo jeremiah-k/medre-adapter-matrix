@@ -12,8 +12,9 @@ pipeline populates the adapter's platform as ``"matrix"``, the renderer
 matches on that platform string directly.
 
 **Supported relation types**: text messages, native replies, native
-threads, native edits (``m.replace``), and reactions (always a
-described ``m.emote`` message — see :meth:`MatrixRenderer._render_reaction`).
+threads, native edits (``m.replace``), and reaction events (described
+``m.emote`` messages — see :meth:`MatrixRenderer._render_reaction`).
+An authored message carrying a reaction relation retains its body.
 Native deletes render as ``redact_event`` operations.
 
 Every native render emits a closed
@@ -32,6 +33,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any, Mapping
+
+from msgspec.structs import replace as replace_event
 
 from .styling import render_payload, source_text
 from medre.adapters.matrix.metadata import build_matrix_metadata_content
@@ -251,7 +254,7 @@ class MatrixRenderer:
 
         **Reactions** — every delivered reaction crosses a network
         boundary and is emitted through the bridge's own session
-        identity, so reactions always render as described ``m.emote``
+        identity, so single-relation reaction events render as described ``m.emote``
         messages regardless of delivery strategy or target resolution: a
         native ``m.reaction`` annotation would carry the bridge identity
         instead of the reacting source user, and Matrix annotation
@@ -312,7 +315,7 @@ class MatrixRenderer:
                 and edit_rel is None
                 and delete_rel is None
                 and thread_rel is None
-                and event.event_kind != EventKind.MESSAGE_FILE
+                and event.event_kind == EventKind.MESSAGE_REACTED
             )
             else None
         )
@@ -523,7 +526,17 @@ class MatrixRenderer:
 
         Sets ``fallback_applied="strategy_fallback_text"`` on the result.
         """
-        degraded_text = extract_relation_text(event)
+        if event.relations:
+            # Reply context wins a constrained fallback budget, independently
+            # of the canonical tuple order. Do not rewrite the stored event.
+            ordered = tuple(
+                sorted(event.relations, key=lambda rel: rel.relation_type != "reply")
+            )
+            degraded_text = extract_relation_text(
+                replace_event(event, relations=ordered)
+            )
+        else:
+            degraded_text = extract_relation_text(event)
 
         # Apply relay prefix for mesh→Matrix direction BEFORE truncation
         # so that the final body (prefix + text) respects the text budget.

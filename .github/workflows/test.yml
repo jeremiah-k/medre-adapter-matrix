@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       core_ref:
-        description: MEDRE revision (defaults to the shared rendering core candidate)
+        description: MEDRE revision (defaults to MEDRE_CORE_REF variable or main)
         type: string
       sdk_ref:
         description: Full commit SHA from jeremiah-k/mindroom-nio (SDK jobs only)
@@ -15,7 +15,24 @@ on:
 permissions:
   contents: read
 jobs:
+  core-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.snapshot.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: jeremiah-k/medre
+          ref: ${{ inputs.core_ref || vars.MEDRE_CORE_REF || 'main' }}
+          path: .core
+          persist-credentials: false
+      - name: Snapshot core revision
+        id: snapshot
+        run: echo "sha=$(git -C .core rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   test:
+    needs: core-plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -30,7 +47,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jeremiah-k/medre
-          ref: ${{ inputs.core_ref || 'cc0dbf10b2159884e953db8ef56c81a10f40fd11' }}
+          ref: ${{ needs.core-plan.outputs.sha }}
           path: .core
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -104,6 +121,7 @@ jobs:
         run: .core/.venv/bin/python -m pytest -v -m "matrix_sdk and not local_integration and not soak and not live and not hardware and not docker"
 
   windows-e2ee-contract:
+    needs: core-plan
     # mindroom-nio requires POSIX file leases. Lane stays off until
     # Windows ownership support is released; crypto import is insufficient.
     # Restore by setting the WINDOWS_E2EE_CONTRACT repository variable to 1.
@@ -123,7 +141,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jeremiah-k/medre
-          ref: ${{ inputs.core_ref || 'cc0dbf10b2159884e953db8ef56c81a10f40fd11' }}
+          ref: ${{ needs.core-plan.outputs.sha }}
           path: .core
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -138,7 +156,7 @@ jobs:
           adapter_sha=$(git rev-parse HEAD)
           echo "Core baseline: ${core_sha}; adapter: ${adapter_sha}"
           echo "Core baseline: ${core_sha}; adapter: ${adapter_sha}" >> "$GITHUB_STEP_SUMMARY"
-      - name: Install pinned core and Matrix with native encryption
+      - name: Install selected core and Matrix with native encryption
         run: |
           uv sync --project .core --locked --extra dev
           .core/.venv/Scripts/python.exe .core/scripts/ci/install_checkout_adapter.py --adapter . --test --python .core/.venv/Scripts/python.exe
