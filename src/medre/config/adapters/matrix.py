@@ -7,6 +7,8 @@ to verify the configuration before passing it to :class:`MatrixAdapter`.
 
 from __future__ import annotations
 
+from medre.core.rendering.attribution import validate_relay_prefix
+
 import math
 from dataclasses import dataclass, replace
 from typing import Any, Literal
@@ -370,6 +372,10 @@ class MatrixConfig:
                 f"got {type(self.relay_prefix).__name__}"
             )
 
+        try:
+            validate_relay_prefix(self.relay_prefix)
+        except ValueError as exc:
+            raise MatrixConfigError(str(exc)) from exc
         return self
 
     def __repr__(self) -> str:

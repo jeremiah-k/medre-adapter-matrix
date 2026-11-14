@@ -402,7 +402,7 @@ class TestRendererThreads:
         content = _content_of(result)
         assert "m.relates_to" not in content
         assert content["msgtype"] == "m.text"
-        assert content["body"] == "edited text"
+        assert content["body"] == "[thread on: unknown message] edited text"
 
     async def test_thread_with_unbound_root_preserves_bound_reply(self) -> None:
         renderer = MatrixRenderer()
@@ -418,7 +418,7 @@ class TestRendererThreads:
         )
         content = _content_of(result)
         assert content["m.relates_to"] == {"m.in_reply_to": {"event_id": "$parent"}}
-        assert content["body"] == "reply only"
+        assert content["body"] == "[thread on: unknown message] reply only"
 
     async def test_thread_target_from_other_room_is_not_rendered(self) -> None:
         renderer = MatrixRenderer()

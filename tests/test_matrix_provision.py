@@ -22,9 +22,9 @@ from medre.adapters.matrix.provision import (
 )
 from medre.cli.main import _build_parser
 
-BOT = "@forxrelay:synod.im"
-USER = "@tadchilly:matrix.org"
-SERVER = "synod.im"
+BOT = "@bridge:bridge.example.org"
+USER = "@bob:example.org"
+SERVER = "bridge.example.org"
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +299,7 @@ async def test_provision_rejects_admin_outside_invite_set() -> None:
     assert client.calls == []
 
 
-@pytest.mark.parametrize("bad_mxid", ["tadchilly", "@:matrix.org", "@user:"])
+@pytest.mark.parametrize("bad_mxid", ["bob", "@:matrix.org", "@user:"])
 async def test_provision_rejects_malformed_user_id_before_creation(
     bad_mxid: str,
 ) -> None:

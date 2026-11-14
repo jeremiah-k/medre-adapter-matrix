@@ -57,7 +57,13 @@ def _event(
 ) -> CanonicalEvent:
     return CanonicalEvent(
         event_id="evt-001",
-        event_kind="message.created",
+        event_kind=(
+            "message.reacted"
+            if relations
+            and len(relations) == 1
+            and relations[0].relation_type == "reaction"
+            else "message.created"
+        ),
         schema_version=1,
         timestamp=datetime.now(UTC),
         source_adapter=source_adapter,

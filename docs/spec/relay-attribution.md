@@ -8,8 +8,10 @@ fall back to native sender identity. Nonprintable names use the identity fallbac
 A configured string MUST take precedence; `relay_prefix: ""` MUST disable the
 prefix. The same visible attribution MUST appear in plain and HTML bodies, with
 HTML escaped as content. Automatic prefixes MUST NOT rewrite canonical payloads.
-Reaction deliveries share this policy: every delivered reaction is a described
-emote message carrying the source attribution, never a native annotation.
+Reaction events share this policy: a single-relation reaction event is a
+described emote message carrying source attribution, never a native annotation.
+An authored message carrying reaction context retains its authored body and
+describes the reaction inline; mixed relations preserve their readable context.
 Configured output budgets still apply after complete composition.
 
 ## Unbound reply context
@@ -20,6 +22,10 @@ a Matrix relation from a canonical ID, a different adapter, or another room.
 The renderer MUST record the `relation_reply` fallback and preserve reply
 precedence when another relation appears first. This fallback MUST NOT change
 the stored event, its relation tuple, or its source attribution.
+Unrepresented reply descriptions MUST precede other descriptions in visible
+text and media captions, whether or not other relations have native bindings;
+remaining descriptions retain their relative order. This keeps reply context
+ahead of reaction descriptions under a constrained output budget.
 
 ## Text presentation
 
@@ -37,3 +43,22 @@ plain presentation when their complete-line bounds cannot be preserved.
 Only supported semantic tags are emitted; source HTML attributes and arbitrary
 markup MUST NOT be forwarded. Formatting does not establish identity or change
 relation ownership, native metadata, or delivery confirmation.
+
+## Native text boundaries
+
+Media captions MUST describe relations that are not represented by native fields
+before final text-budget enforcement. Truncating a caption MUST NOT alter the
+retained content reference or filename metadata.
+
+Native text replacements MUST retain secondary relation descriptions without
+changing the authorized mutation target. Both the replacement and its visible
+`* ` fallback body MUST fit the destination text budgets; an oversized edit
+MUST be rejected rather than clipped. Multiple edit/delete targets MUST be
+rejected as ambiguous before constructing a native mutation.
+
+Native mutation intent MUST agree with the event kind: an edit requires
+`message.edited` and one edit relation; a redaction requires `message.deleted`
+and one delete relation. A missing or mismatched mutation relation MUST fail
+closed before constructing an operation, even when a supplied target is owned.
+Explicit text-fallback delivery continues to describe the event without a native
+mutation.

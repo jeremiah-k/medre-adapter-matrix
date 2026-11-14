@@ -102,6 +102,9 @@ async def test_relations_render_through_canonical_shape_without_legacy_fields(
 
     event = replace(
         _event(),
+        event_kind=(
+            "message.reacted" if relation_type == "reaction" else "message.created"
+        ),
         relations=(
             EventRelation(
                 relation_type=relation_type,
