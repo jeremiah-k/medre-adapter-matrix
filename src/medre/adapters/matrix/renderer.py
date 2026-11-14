@@ -117,6 +117,16 @@ def _find_relation(
     return None
 
 
+def _reply_first(event: CanonicalEvent) -> CanonicalEvent:
+    """Prioritize visible reply context without changing canonical relation order."""
+    ordered = tuple(
+        sorted(event.relations, key=lambda rel: rel.relation_type != "reply")
+    )
+    if ordered == event.relations:
+        return event
+    return replace_event(event, relations=ordered)
+
+
 class MatrixRenderer:
     """Renderer for Matrix presentation targets.
 
@@ -381,7 +391,9 @@ class MatrixRenderer:
         body = source_text(event.payload)
         if not selected_reaction:
             body = compose_relation_text(
-                event, body, represented=(reply_rel,) if reply_rel is not None else ()
+                _reply_first(event),
+                body,
+                represented=(reply_rel,) if reply_rel is not None else (),
             )
 
         # Reactions manage their own prefix metadata inside the described
@@ -403,8 +415,7 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": render_payload(event.payload, body)
-            or self._text_to_html(body),
+            "formatted_body": self._render_body_html(event, body),
         }
 
         truncated = False
@@ -536,15 +547,7 @@ class MatrixRenderer:
 
         Sets ``fallback_applied="strategy_fallback_text"`` on the result.
         """
-        if event.relations:
-            # Reply context wins a constrained fallback budget, independently
-            # of the canonical tuple order. Do not rewrite the stored event.
-            ordered = tuple(
-                sorted(event.relations, key=lambda rel: rel.relation_type != "reply")
-            )
-            degraded_text = extract_event_text(replace_event(event, relations=ordered))
-        else:
-            degraded_text = extract_event_text(event)
+        degraded_text = extract_event_text(_reply_first(event))
 
         # Apply relay prefix for mesh→Matrix direction BEFORE truncation
         # so that the final body (prefix + text) respects the text budget.
@@ -875,7 +878,9 @@ class MatrixRenderer:
             for rel, native_id in ((thread_rel, root_id), (reply_rel, parent_id))
             if rel is not None and native_id is not None
         )
-        caption = compose_relation_text(event, caption, represented=represented)
+        caption = compose_relation_text(
+            _reply_first(event), caption, represented=represented
+        )
         caption, prefix_meta = self._apply_matrix_relay_prefix(
             event, caption, target_adapter, ctx
         )
@@ -956,7 +961,7 @@ class MatrixRenderer:
             }
 
         body = compose_relation_text(
-            event,
+            _reply_first(event),
             source_text(event.payload),
             represented=(thread_rel,)
             + ((reply_rel,) if parent_id and reply_rel is not None else ()),
@@ -970,11 +975,7 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": (
-                self._text_to_html(body)
-                if truncated
-                else render_payload(event.payload, body) or self._text_to_html(body)
-            ),
+            "formatted_body": self._render_body_html(event, body, truncated=truncated),
             "m.relates_to": relates_to,
         }
 
@@ -997,6 +998,17 @@ class MatrixRenderer:
             fallback_applied=None,
         )
 
+    def _render_body_html(
+        self, event: CanonicalEvent, body: str, *, truncated: bool = False
+    ) -> str:
+        """Do not reuse suppressed payload spans on derived reaction/delete text."""
+        if truncated or event.event_kind in (
+            EventKind.MESSAGE_REACTED,
+            EventKind.MESSAGE_DELETED,
+        ):
+            return self._text_to_html(body)
+        return render_payload(event.payload, body) or self._text_to_html(body)
+
     def _render_plain_message(
         self,
         event: CanonicalEvent,
@@ -1008,7 +1020,7 @@ class MatrixRenderer:
         """Render a plain message, optionally retaining one bound reply."""
         target_adapter = ctx.target_adapter
         body = compose_relation_text(
-            event, source_text(event.payload), represented=represented
+            _reply_first(event), source_text(event.payload), represented=represented
         )
         body, prefix_meta = self._apply_matrix_relay_prefix(
             event, body, target_adapter, ctx
@@ -1019,11 +1031,7 @@ class MatrixRenderer:
             "msgtype": "m.text",
             "body": body,
             "format": "org.matrix.custom.html",
-            "formatted_body": (
-                self._text_to_html(body)
-                if truncated
-                else render_payload(event.payload, body) or self._text_to_html(body)
-            ),
+            "formatted_body": self._render_body_html(event, body, truncated=truncated),
         }
         if reply_target_id is not None:
             content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_target_id}}
@@ -1113,7 +1121,7 @@ class MatrixRenderer:
         )
 
         new_text = compose_relation_text(
-            event, source_text(event.payload), represented=(edit_rel,)
+            _reply_first(event), source_text(event.payload), represented=(edit_rel,)
         )
         # Exactly one relay attribution: applied once to the new body.
         new_body, prefix_meta = self._apply_matrix_relay_prefix(

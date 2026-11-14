@@ -211,3 +211,46 @@ async def test_relation_free_reaction_never_forwards_payload_body(strategy, styl
     assert content["body"] == "[reacted]"
     assert "authored" not in content.get("formatted_body", "")
     assert "m.relates_to" not in content
+
+
+@pytest.mark.parametrize("thread_id", [None, "$root"])
+@pytest.mark.parametrize("kind", ["message.created", "message.file"])
+async def test_unbound_reply_visible_in_thread_and_media_budget(thread_id, kind):
+    original = event(
+        kind,
+        (
+            relation("reaction", key="👍"),
+            relation("thread", thread_id),
+            relation("reply"),
+        ),
+        body="answer",
+    )
+    result = await MatrixRenderer().render(original, context(max_text_chars=31))
+    content = MatrixOutboundOperation.from_payload(result.payload).content
+    assert content["body"].startswith("[replying to: unknown message]")
+    assert result.truncated
+    if thread_id:
+        assert content["m.relates_to"]["event_id"] == thread_id
+    else:
+        assert "m.relates_to" not in content
+    assert tuple(rel.relation_type for rel in original.relations) == (
+        "reaction",
+        "thread",
+        "reply",
+    )
+
+
+@pytest.mark.parametrize("thread_id", [None, "$root"])
+async def test_reaction_marker_never_reuses_suppressed_body_spans(thread_id):
+    from msgspec.structs import replace as replace_event
+    from medre.core.events.text import StyledText, TextSpan
+
+    relations = (relation("thread", thread_id),) if thread_id else ()
+    original = replace_event(
+        event("message.reacted", relations),
+        payload=StyledText("[reacted]", (TextSpan(0, 9, "strong"),)).to_payload(),
+    )
+    result = await MatrixRenderer().render(original, context())
+    content = MatrixOutboundOperation.from_payload(result.payload).content
+    assert content["body"] == "[reacted]"
+    assert "<strong>" not in content["formatted_body"]

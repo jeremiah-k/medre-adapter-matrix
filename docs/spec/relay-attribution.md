@@ -22,7 +22,8 @@ a Matrix relation from a canonical ID, a different adapter, or another room.
 The renderer MUST record the `relation_reply` fallback and preserve reply
 precedence when another relation appears first. This fallback MUST NOT change
 the stored event, its relation tuple, or its source attribution.
-Reply descriptions MUST precede other descriptions in fallback presentation;
+Unrepresented reply descriptions MUST precede other descriptions in visible
+text and media captions, whether or not other relations have native bindings;
 remaining descriptions retain their relative order. This keeps reply context
 ahead of reaction descriptions under a constrained output budget.
 
