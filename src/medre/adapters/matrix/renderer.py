@@ -333,6 +333,16 @@ class MatrixRenderer:
             raise MatrixNativeMutationError(
                 "native mutation refused: multiple mutation targets are ambiguous"
             )
+        expected_mutation = {
+            EventKind.MESSAGE_EDITED: "edit",
+            EventKind.MESSAGE_DELETED: "delete",
+        }.get(event.event_kind)
+        if (mutations or expected_mutation is not None) and (
+            not mutations or mutations[0].relation_type != expected_mutation
+        ):
+            raise MatrixNativeMutationError(
+                "native mutation refused: event kind and mutation relation must match"
+            )
 
         # ------------------------------------------------------------------
         # Native / direct path (described reactions in any strategy)

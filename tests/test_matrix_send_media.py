@@ -124,6 +124,7 @@ def decoded_event(
     *,
     payload_overlay: dict[str, Any] | None = None,
     relations: tuple[EventRelation, ...] = (),
+    event_kind: str | None = None,
 ):
     """Decode a normalized dict and overlay persisted payload/relations."""
     from msgspec import structs as msgspec_structs
@@ -132,7 +133,12 @@ def decoded_event(
     payload = dict(canonical.payload)
     if payload_overlay:
         payload.update(payload_overlay)
-    return msgspec_structs.replace(canonical, payload=payload, relations=relations)
+    return msgspec_structs.replace(
+        canonical,
+        payload=payload,
+        relations=relations,
+        event_kind=event_kind if event_kind is not None else canonical.event_kind,
+    )
 
 
 def retained_media_event(
@@ -430,7 +436,9 @@ async def test_edit_with_media_msgtype_content_is_rejected() -> None:
     )
     from msgspec import structs as msgspec_structs
 
-    enriched = msgspec_structs.replace(event, relations=(relation,))
+    enriched = msgspec_structs.replace(
+        event, relations=(relation,), event_kind=EventKind.MESSAGE_EDITED
+    )
     with pytest.raises(MatrixNativeMutationError, match="attachment_edit_unsupported"):
         await MatrixRenderer().render(enriched, render_ctx())
 
@@ -438,6 +446,7 @@ async def test_edit_with_media_msgtype_content_is_rejected() -> None:
 async def test_edit_targeting_stored_media_original_is_rejected() -> None:
     event = decoded_event(
         text_event_dict(),
+        event_kind=EventKind.MESSAGE_EDITED,
         relations=(
             _edit_relation(
                 RelationTargetFact(
@@ -458,6 +467,7 @@ async def test_edit_targeting_stored_media_original_is_rejected() -> None:
 async def test_text_edit_of_text_original_renders_replace() -> None:
     event = decoded_event(
         text_event_dict(),
+        event_kind=EventKind.MESSAGE_EDITED,
         relations=(
             _edit_relation(
                 RelationTargetFact(

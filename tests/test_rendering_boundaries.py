@@ -167,3 +167,24 @@ async def test_unbound_reply_description_has_budget_precedence(strategy):
     assert content["body"].startswith("[replying to: unknown message]")
     assert result.truncated
     assert original.relations[0].relation_type == "reaction"
+
+
+@pytest.mark.parametrize(
+    "kind,mutation",
+    [
+        ("message.created", "edit"),
+        ("message.created", "delete"),
+        ("message.edited", "delete"),
+        ("message.deleted", "edit"),
+        ("message.edited", None),
+        ("message.deleted", None),
+    ],
+)
+async def test_native_mutation_requires_matching_kind_and_relation(kind, mutation):
+    """Even owned targets cannot turn another event kind into a native mutation."""
+    original = event(
+        kind, (relation(mutation, "$owned"),) if mutation else (), body="authored"
+    )
+    with pytest.raises(MatrixNativeMutationError, match="event kind"):
+        await MatrixRenderer().render(original, context())
+    assert original.payload["body"] == "authored"

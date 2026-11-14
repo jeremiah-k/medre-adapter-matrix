@@ -22,6 +22,9 @@ a Matrix relation from a canonical ID, a different adapter, or another room.
 The renderer MUST record the `relation_reply` fallback and preserve reply
 precedence when another relation appears first. This fallback MUST NOT change
 the stored event, its relation tuple, or its source attribution.
+Reply descriptions MUST precede other descriptions in fallback presentation;
+remaining descriptions retain their relative order. This keeps reply context
+ahead of reaction descriptions under a constrained output budget.
 
 ## Text presentation
 
@@ -51,3 +54,10 @@ changing the authorized mutation target. Both the replacement and its visible
 `* ` fallback body MUST fit the destination text budgets; an oversized edit
 MUST be rejected rather than clipped. Multiple edit/delete targets MUST be
 rejected as ambiguous before constructing a native mutation.
+
+Native mutation intent MUST agree with the event kind: an edit requires
+`message.edited` and one edit relation; a redaction requires `message.deleted`
+and one delete relation. A missing or mismatched mutation relation MUST fail
+closed before constructing an operation, even when a supplied target is owned.
+Explicit text-fallback delivery continues to describe the event without a native
+mutation.
