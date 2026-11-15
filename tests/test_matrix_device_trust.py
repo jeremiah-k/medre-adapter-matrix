@@ -13,24 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace as dc_replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
-from dataclasses import replace as dc_replace
-
-from medre.adapters.matrix.device_trust import (
-    PeerDevice,
-    PeerDeviceTrustReport,
-    PeerRecipient,
-    evaluate_peer_device_trust,
-    format_peer_device_trust_refusal,
-)
-from medre.adapters.matrix.session import MatrixSession
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import (
     AdapterContext,
     AdapterPermanentError,
@@ -40,6 +29,17 @@ from medre.core.contracts.typing import TypingTarget, TypingUpdate
 from medre.core.rendering.renderer import RenderingResult
 from medre_matrix_tests.helpers.matrix import matrix_send_payload
 from medre_matrix_tests.helpers.matrix_adapter import wire_mock_session
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.device_trust import (
+    PeerDevice,
+    PeerDeviceTrustReport,
+    PeerRecipient,
+    evaluate_peer_device_trust,
+    format_peer_device_trust_refusal,
+)
+from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix import MatrixConfig
 
 ROOM = "!trust-room:example.com"
 OWN_USER = "@bot:example.com"

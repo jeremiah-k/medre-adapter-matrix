@@ -9,10 +9,6 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.errors import MatrixConnectionError
-from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 from medre.core.contracts.adapter import (
     AdapterHandoffResult,
     AdapterRole,
@@ -34,6 +30,11 @@ from medre_matrix_tests.helpers.matrix_adapter import (
     make_matrix_config as _make_matrix_config,
 )
 from medre_matrix_tests.helpers.matrix_adapter import to_event_dict as _to_event_dict
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.errors import MatrixConnectionError
+from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 
 
 def _make_event(event_id: str = "evt-1") -> CanonicalEvent:

@@ -11,6 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from medre.cli.main import _build_parser
+
 from medre.adapters.matrix.provision import (
     MEGOLM_ROOM_ALGORITHM,
     ProvisionReport,
@@ -20,7 +22,6 @@ from medre.adapters.matrix.provision import (
     space_child_content,
     space_parent_content,
 )
-from medre.cli.main import _build_parser
 
 BOT = "@bridge:bridge.example.org"
 USER = "@bob:example.org"

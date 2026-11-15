@@ -1,13 +1,12 @@
 """Embedding policy applies to wire content independently of source adapters."""
 
 import json
-from pathlib import Path
 from datetime import datetime, timezone
-from jsonschema import Draft202012Validator
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from medre.adapters.matrix.renderer import MatrixRenderer
+from jsonschema import Draft202012Validator
 from medre.core.events import (
     CanonicalEvent,
     EventMetadata,
@@ -17,6 +16,8 @@ from medre.core.events import (
 )
 from medre.core.rendering.renderer import RenderingContext
 from medre_matrix_tests.helpers.matrix import matrix_payload_content
+
+from medre.adapters.matrix.renderer import MatrixRenderer
 
 
 def _event() -> CanonicalEvent:
@@ -97,8 +98,8 @@ async def test_metadata_mode_and_source_config_are_independent(mode, strategy):
 async def test_relations_render_through_canonical_shape_without_legacy_fields(
     relation_type,
 ):
-    from msgspec.structs import replace
     from medre.core.events import EventRelation
+    from msgspec.structs import replace
 
     event = replace(
         _event(),

@@ -26,16 +26,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.adapters.matrix.adapter import (
-    MatrixAdapter,
-    _is_nio_permanent_response,
-    _is_nio_rate_limited_response,
-    _is_transient_error,
-    _matrix_txn_id,
-    _NioRateLimitError,
-)
-from medre.adapters.matrix.outbound import MatrixOutboundOperation
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import (
     MAX_ADAPTER_RETRY_AFTER_SECONDS,
     AdapterContext,
@@ -46,6 +36,17 @@ from medre.core.rendering.renderer import RenderingResult
 from medre_matrix_tests.helpers.matrix_adapter import (
     wire_mock_session as _wire_mock_session,
 )
+
+from medre.adapters.matrix.adapter import (
+    MatrixAdapter,
+    _is_nio_permanent_response,
+    _is_nio_rate_limited_response,
+    _is_transient_error,
+    _matrix_txn_id,
+    _NioRateLimitError,
+)
+from medre.adapters.matrix.outbound import MatrixOutboundOperation
+from medre.config.adapters.matrix import MatrixConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -74,8 +74,9 @@ class TestLiveE2EEStart:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)
@@ -105,9 +106,10 @@ class TestLiveE2EESend:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)
@@ -147,8 +149,9 @@ class TestLiveE2EERestart:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)
@@ -177,8 +180,9 @@ class TestLiveE2EERestart:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)
@@ -209,9 +213,10 @@ class TestLiveE2EERestart:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)
@@ -251,8 +256,9 @@ class TestLiveE2EEStartStopCycles:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)
@@ -279,8 +285,9 @@ class TestLiveE2EEStartStopCycles:
         pytest.importorskip("nio")
         from datetime import datetime, timezone
 
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _live_config()
         adapter = MatrixAdapter(config)

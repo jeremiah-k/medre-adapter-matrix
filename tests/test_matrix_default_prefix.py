@@ -1,10 +1,12 @@
 """Default visible attribution brackets full sender origin in Matrix bodies."""
 
-from datetime import datetime, timezone
 from dataclasses import replace
+from datetime import datetime, timezone
+
 import pytest
 from medre.core.events import CanonicalEvent, EventMetadata, NativeMetadata
 from medre.core.rendering.renderer import RenderingContext
+
 from medre.adapters.matrix.renderer import MatrixRenderer
 from medre.config.adapters.matrix import MatrixConfig
 

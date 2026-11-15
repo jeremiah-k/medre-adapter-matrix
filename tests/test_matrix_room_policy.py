@@ -25,9 +25,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.session import MatrixSession
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import AdapterPermanentError
 from medre.core.ingress import AdmissionResult
 from medre.core.rendering.renderer import RenderingResult
@@ -37,6 +34,10 @@ from medre_matrix_tests.helpers.matrix_adapter import (
     make_fake_nio_event,
     wire_mock_session,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix import MatrixConfig
 
 _ROOM = "!room:example.com"
 _ENCRYPTED_ROOM = "!enc:example.com"

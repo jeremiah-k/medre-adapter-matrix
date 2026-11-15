@@ -5,6 +5,7 @@ import os
 import stat
 
 import pytest
+
 from medre.config.adapters.matrix_credentials import (
     load_credentials_json,
     write_credentials_json,

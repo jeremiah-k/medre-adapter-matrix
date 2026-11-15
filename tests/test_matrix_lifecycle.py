@@ -33,11 +33,12 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from medre.core.contracts.adapter import AdapterContext
+from medre_matrix_tests.helpers.async_utils import wait_until
+
 from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.contracts.adapter import AdapterContext
-from medre_matrix_tests.helpers.async_utils import wait_until
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -17,9 +17,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from medre.adapters.matrix.codec import MatrixCodec
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events import (
     CanonicalEvent,
     EventMetadata,
@@ -28,6 +25,10 @@ from medre.core.events import (
 )
 from medre.core.rendering.renderer import RenderingContext
 from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload_content
+
+from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.config.adapters.matrix import MatrixConfig
 
 # ---------------------------------------------------------------------------
 # Outbound helpers

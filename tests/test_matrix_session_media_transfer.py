@@ -16,6 +16,9 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from medre.core.ingress.types import AdapterCheckpoint
+from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
 from medre.adapters.matrix.errors import (
     MATRIX_ATTACHMENT_FETCH_MAX_DEFERRALS,
     MatrixAttachmentFetchDeferredError,
@@ -28,8 +31,6 @@ from medre.adapters.matrix.session import (
     MatrixSession,
     _RoomRateLimitIntercept,
 )
-from medre.core.ingress.types import AdapterCheckpoint
-from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 MXC = "mxc://hs.example/media123"
 

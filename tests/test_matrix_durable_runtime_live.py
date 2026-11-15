@@ -10,16 +10,16 @@ when native sync fails: missing real ingress is a failure.
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
 
 import pytest
 from medre.config.loader import load_config
-from medre.runtime.builder import RuntimeBuilder
 from medre.core.storage.sqlite.storage import SQLiteStorage
+from medre.runtime.builder import RuntimeBuilder
 from medre_matrix_tests.helpers.async_utils import wait_until
 
 pytestmark = [pytest.mark.local_integration, pytest.mark.matrix_sdk]
@@ -32,6 +32,7 @@ async def native_peer(http, homeserver, token, room, store_path, *, encrypted):
         yield None
         return
     import nio
+
     from medre.adapters.matrix.client_lifecycle import close_matrix_client
 
     async with http.get(
@@ -243,15 +244,17 @@ async def test_delegated_login_reopens_same_native_device_store(tmp_path, monkey
     required = ("MATRIX_ALIAS_HOMESERVER", "MATRIX_LOGIN_USER", "MATRIX_LOGIN_PASSWORD")
     if not all(os.environ.get(name) for name in required):
         pytest.skip("explicit local delegated-login accounts are required")
-    from urllib.parse import urlsplit
     from unittest.mock import AsyncMock
+    from urllib.parse import urlsplit
+
     import nio
+
     from medre.adapters.matrix.auth import (
         discover_well_known,
         matrix_login,
         save_credentials_json,
     )
-    from medre.adapters.matrix.durable_sync import open_sync, _existing_consumer_id
+    from medre.adapters.matrix.durable_sync import _existing_consumer_id, open_sync
     from medre.adapters.matrix.session import MatrixSession
     from medre.config.adapters.matrix import MatrixConfig
 

@@ -13,12 +13,8 @@ whose target resolves to a Matrix event ID owned by the destination.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from msgspec.structs import replace
 
 import pytest
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events import (
     CanonicalEvent,
     EventMetadata,
@@ -28,6 +24,11 @@ from medre.core.events import (
 from medre.core.planning.delivery_plan import DeliveryStrategyMethod
 from medre.core.rendering.renderer import RenderingContext
 from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload_content
+from msgspec.structs import replace
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.config.adapters.matrix import MatrixConfig
 
 _TARGET = "chat-instance"
 _ROOM = "!room:example.org"

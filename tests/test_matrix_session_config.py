@@ -7,10 +7,11 @@ No test requires mindroom-nio[e2e].
 from __future__ import annotations
 
 import pytest
+from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix_errors import MatrixConfigError
-from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 # ===================================================================
 # TestMatrixConfigEncryption

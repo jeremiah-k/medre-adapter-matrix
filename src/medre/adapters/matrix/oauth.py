@@ -130,6 +130,7 @@ class OAuthHTTP:
         follow_redirects: bool = False,
     ) -> OAuthResponse:
         import json
+
         import aiohttp
 
         https_url(url)

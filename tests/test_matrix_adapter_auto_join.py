@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.core.contracts.adapter import AdapterPermanentError
 from medre.core.rendering.renderer import RenderingResult
 from medre_matrix_tests.helpers.matrix import matrix_send_payload
@@ -18,6 +17,8 @@ from medre_matrix_tests.helpers.matrix_session import (
     make_matrix_config,
     make_matrix_context,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter
 
 # ===================================================================
 # auto-join integration

@@ -94,6 +94,7 @@ def test_event_classes_discoverable_for_session_registration() -> None:
     pinned fork.
     """
     import nio
+
     from medre.adapters.matrix.session import (
         _media_message_classes,
         _reaction_event_classes,

@@ -1,7 +1,7 @@
 """Package licensing metadata is independent of optional transport SDKs."""
 
-from pathlib import Path
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,10 +41,11 @@ def test_renovate_disclosure_regex_matches_pinned_sdk_with_numeric_extras():
     config = json.loads((ROOT / "renovate.json").read_text())
     managers = [
         manager
-        for manager in config["regexManagers"]
-        if any("DEPENDENCY_LICENSES" in name for name in manager["fileMatch"])
+        for manager in config["customManagers"]
+        if any("DEPENDENCY_LICENSES" in name for name in manager["managerFilePatterns"])
     ]
     assert len(managers) == 1
+    assert managers[0]["customType"] == "regex"
     assert managers[0]["datasourceTemplate"] == "pypi"
     matchers = [
         re.compile(pattern.replace("(?<", "(?P<"))

@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from medre_matrix_tests.helpers.sdk_contract import (
     assert_installed_extra_matches_declared_pins,
 )
@@ -17,8 +16,9 @@ pytestmark = pytest.mark.matrix_sdk
 async def test_real_sdk_send_uses_fresh_bearer_without_query_credentials():
     nio = pytest.importorskip("nio")
     assert_installed_extra_matches_declared_pins("matrix", ("mindroom-nio",))
-    from medre.adapters.matrix.oauth_session import attach_oauth
     from medre_matrix_tests.helpers.oauth import make_session
+
+    from medre.adapters.matrix.oauth_session import attach_oauth
 
     saved = make_session()
     client = nio.AsyncClient(
@@ -49,9 +49,10 @@ async def test_durable_sdk_transport_uses_managed_oauth_refresh():
     """Durable sync must use the wrapped client.send, not a stale bearer token."""
     nio = pytest.importorskip("nio")
     assert_installed_extra_matches_declared_pins("matrix", ("mindroom-nio",))
-    from nio.durable.transport import HttpError, Transport
-    from medre.adapters.matrix.oauth_session import attach_oauth
     from medre_matrix_tests.helpers.oauth import make_session
+    from nio.durable.transport import HttpError, Transport
+
+    from medre.adapters.matrix.oauth_session import attach_oauth
 
     saved = make_session()
     client = nio.AsyncClient(

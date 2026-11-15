@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from medre.adapters.matrix.identity import MatrixCrossSigningService
 
 

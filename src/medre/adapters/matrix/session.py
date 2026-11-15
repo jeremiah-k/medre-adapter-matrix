@@ -31,6 +31,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Literal, cast
 
+from medre.core.ingress import INGRESS_PROVENANCE_VALUES, IngressProvenance
+from medre.core.ingress.types import DurableIngressDeferredError
+
 import medre.adapters.matrix.compat as _compat_mod
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
 from medre.adapters.matrix.device_trust import (
@@ -61,8 +64,6 @@ from medre.adapters.matrix.oauth_session import (
     manager_for_credentials,
 )
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.ingress import INGRESS_PROVENANCE_VALUES, IngressProvenance
-from medre.core.ingress.types import DurableIngressDeferredError
 
 _logger = logging.getLogger(__name__)
 _sleep = asyncio.sleep
@@ -2984,6 +2985,7 @@ class MatrixSession:
             durable-ingress ownership.
         """
         from aiohttp import ClientTimeout
+
         from medre.adapters.matrix.errors import (
             MatrixMediaTransientError,
             MatrixMediaUnavailableError,

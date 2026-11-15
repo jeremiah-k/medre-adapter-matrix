@@ -193,18 +193,18 @@ async def _adapter_matrix_auth_login(args: object) -> None:
         sys.exit(1)
 
     # Step 6: Login + whoami + mismatch check --------------------------------
-    from medre.adapters.matrix.errors import MatrixConnectionError
+    # An adapter-scoped bootstrap should reuse its already-authenticated
+    # device. A second password login would create another device and orphan
+    # the first token when the credential sidecar is overwritten.
     from medre.adapters.matrix.auth import (
+        MatrixLoginResult,
+        _normalize_homeserver,
         matrix_login,
         matrix_logout,
         matrix_whoami,
         save_credentials_json,
     )
-
-    # An adapter-scoped bootstrap should reuse its already-authenticated
-    # device. A second password login would create another device and orphan
-    # the first token when the credential sidecar is overwritten.
-    from medre.adapters.matrix.auth import MatrixLoginResult, _normalize_homeserver
+    from medre.adapters.matrix.errors import MatrixConnectionError
 
     original_session = False
     if saved is not None:
@@ -402,11 +402,11 @@ async def _adapter_matrix_provision(args: object) -> None:
         )
         sys.exit(1)
 
-    from medre.adapters.matrix.errors import MatrixConnectionError
     from medre.adapters.matrix.auth import (
         check_credentials_completeness,
         matrix_whoami,
     )
+    from medre.adapters.matrix.errors import MatrixConnectionError
     from medre.config.adapters.matrix_credentials import (
         get_credentials_path,
         load_credentials_json,
@@ -440,8 +440,8 @@ async def _adapter_matrix_provision(args: object) -> None:
 
     try:
         from medre.adapters.matrix.oauth_session import (
-            manager_for_credentials,
             attach_oauth,
+            manager_for_credentials,
         )
 
         manager = manager_for_credentials(homeserver, user_id, device_id, access_token)

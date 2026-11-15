@@ -3,11 +3,12 @@
 from pathlib import Path
 
 import pytest
-from medre.adapters.matrix.session import MatrixSession
 from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 from medre_matrix_tests.helpers.sdk_contract import (
     assert_installed_extra_matches_declared_pins,
 )
+
+from medre.adapters.matrix.session import MatrixSession
 
 
 @pytest.mark.matrix_sdk

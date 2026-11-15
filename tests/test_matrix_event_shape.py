@@ -10,6 +10,14 @@ from typing import Any
 
 import pytest
 from jsonschema import Draft202012Validator
+from medre.core.events.canonical import CanonicalEvent
+from medre.core.events.kinds import EventKind
+from medre_matrix_tests.helpers.matrix import (
+    make_nio_event,
+    make_nio_room,
+    to_event_dict,
+)
+
 from medre.adapters.matrix.attribution import project_matrix_attribution
 from medre.adapters.matrix.codec import MatrixCodec
 from medre.adapters.matrix.event_shape import (
@@ -20,13 +28,6 @@ from medre.adapters.matrix.event_shape import (
 )
 from medre.adapters.matrix.metadata import MATRIX_METADATA_ENVELOPE_SCHEMA_VERSION
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.events.canonical import CanonicalEvent
-from medre.core.events.kinds import EventKind
-from medre_matrix_tests.helpers.matrix import (
-    make_nio_event,
-    make_nio_room,
-    to_event_dict,
-)
 
 
 def _config() -> MatrixConfig:
@@ -868,10 +869,11 @@ def test_malformed_wire_provenance_is_discarded_without_dropping_message(
 @pytest.mark.asyncio
 async def test_bounded_bridge_reaction_survives_matrix_without_flat_keys() -> None:
     """Carry generic peer hints without treating them as trusted Matrix relations."""
-    from medre.adapters.matrix.renderer import MatrixRenderer
     from medre.core.events import EventMetadata, EventRelation, NativeRef
     from medre.core.rendering.renderer import RenderingContext
     from medre_matrix_tests.helpers.matrix import matrix_payload_content
+
+    from medre.adapters.matrix.renderer import MatrixRenderer
 
     ref = NativeRef("radio-east", "LongFast", "0")
     source = CanonicalEvent(

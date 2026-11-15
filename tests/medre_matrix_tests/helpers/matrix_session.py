@@ -15,8 +15,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import AdapterContext
+
+from medre.config.adapters.matrix import MatrixConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

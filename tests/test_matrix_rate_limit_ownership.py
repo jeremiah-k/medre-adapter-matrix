@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from medre.adapters.matrix.session import MatrixSession
 from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
+from medre.adapters.matrix.session import MatrixSession
 
 
 async def test_session_registers_room_send_rate_limit_interceptor(mock_nio) -> None:

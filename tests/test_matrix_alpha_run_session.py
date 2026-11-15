@@ -337,10 +337,11 @@ class TestMatrixAlphaDirectAdapter:
 
     async def test_direct_adapter_send_and_verify_event_id(self) -> None:
         """Send via direct MatrixAdapter.deliver() and verify event_id."""
-        from medre.adapters.matrix.adapter import MatrixAdapter
-        from medre.config.adapters.matrix import MatrixConfig
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
+        from medre.config.adapters.matrix import MatrixConfig
 
         assert MATRIX_HOMESERVER is not None
         assert MATRIX_USER_ID is not None
@@ -393,10 +394,11 @@ class TestMatrixAlphaDirectAdapter:
 
     async def test_direct_adapter_diagnostics_after_send(self) -> None:
         """Verify MatrixAdapter diagnostics are complete after a direct send."""
-        from medre.adapters.matrix.adapter import MatrixAdapter
-        from medre.config.adapters.matrix import MatrixConfig
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
+        from medre.config.adapters.matrix import MatrixConfig
 
         assert MATRIX_HOMESERVER is not None
         assert MATRIX_USER_ID is not None

@@ -16,12 +16,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from medre.core.rendering.renderer import RenderingResult
+
 from medre.adapters.matrix.outbound import (
     MATRIX_OPERATION_KEY,
     MatrixOutboundOperation,
 )
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.rendering.renderer import RenderingResult
 
 
 def matrix_payload_content(result: RenderingResult) -> dict[str, object]:

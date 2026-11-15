@@ -3,13 +3,13 @@
 from datetime import UTC, datetime
 
 import pytest
-
-from medre.adapters.matrix.outbound import MatrixOutboundOperation
-from medre.adapters.matrix.renderer import MatrixNativeMutationError, MatrixRenderer
 from medre.core.events import CanonicalEvent, EventMetadata, EventRelation, NativeRef
 from medre.core.events.attachments import ATTACHMENT_PAYLOAD_KEY, AttachmentDescriptor
 from medre.core.events.canonical import RelationTargetFact
 from medre.core.rendering.renderer import RenderingContext
+
+from medre.adapters.matrix.outbound import MatrixOutboundOperation
+from medre.adapters.matrix.renderer import MatrixNativeMutationError, MatrixRenderer
 
 
 def event(kind, relations, body="caption"):
@@ -197,8 +197,8 @@ async def test_relation_free_reaction_never_forwards_payload_body(strategy, styl
 
     original = event("message.reacted", (), body="authored")
     if styled:
-        from msgspec.structs import replace as replace_event
         from medre.core.events.text import StyledText, TextSpan
+        from msgspec.structs import replace as replace_event
 
         original = replace_event(
             original,
@@ -242,8 +242,8 @@ async def test_unbound_reply_visible_in_thread_and_media_budget(thread_id, kind)
 
 @pytest.mark.parametrize("thread_id", [None, "$root"])
 async def test_reaction_marker_never_reuses_suppressed_body_spans(thread_id):
-    from msgspec.structs import replace as replace_event
     from medre.core.events.text import StyledText, TextSpan
+    from msgspec.structs import replace as replace_event
 
     relations = (relation("thread", thread_id),) if thread_id else ()
     original = replace_event(

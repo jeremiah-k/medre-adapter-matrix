@@ -3,8 +3,9 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from medre.adapters.matrix.session import MatrixSession
 from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
+from medre.adapters.matrix.session import MatrixSession
 
 
 @pytest.mark.parametrize("cursor", [None, "durable-cursor"])

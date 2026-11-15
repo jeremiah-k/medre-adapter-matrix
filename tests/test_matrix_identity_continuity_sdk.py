@@ -12,16 +12,16 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+from medre_matrix_tests.helpers.sdk_contract import (
+    assert_installed_extra_matches_declared_pins,
+)
 
 from medre.adapters.matrix.auth import MatrixLoginResult
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
 from medre.adapters.matrix.durable_sync import open_sync
 from medre.adapters.matrix.e2ee_bootstrap import bootstrap_login_cross_signing
-from medre.adapters.matrix.identity import MatrixCrossSigningService
 from medre.adapters.matrix.errors import MatrixConnectionError
-from medre_matrix_tests.helpers.sdk_contract import (
-    assert_installed_extra_matches_declared_pins,
-)
+from medre.adapters.matrix.identity import MatrixCrossSigningService
 
 pytestmark = pytest.mark.matrix_sdk
 
@@ -59,6 +59,7 @@ async def test_signing_setup_and_durable_reopen_preserve_identity(
         CrossSigningIdentity,
         cross_signing_sidecar_path,
     )
+
     import medre.adapters.matrix.e2ee_bootstrap as bootstrap
 
     user, device, adapter_id = "@relay:example", "PERSISTED_DEVICE", "continuity"

@@ -7,11 +7,11 @@ to verify the configuration before passing it to :class:`MatrixAdapter`.
 
 from __future__ import annotations
 
-from medre.core.rendering.attribution import validate_relay_prefix
-
 import math
 from dataclasses import dataclass, replace
 from typing import Any, Literal
+
+from medre.core.rendering.attribution import validate_relay_prefix
 
 from medre.config.adapters.matrix_errors import MatrixConfigError
 

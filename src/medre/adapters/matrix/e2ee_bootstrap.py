@@ -13,6 +13,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from medre.config.paths import resolve
+
 import medre.adapters.matrix.compat as _compat_mod
 from medre.adapters.matrix.auth import MatrixLoginResult
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
@@ -23,7 +25,6 @@ from medre.adapters.matrix.identity import (
     MatrixCrossSigningService,
 )
 from medre.adapters.matrix.oauth_session import OAuthSessionManager, attach_oauth
-from medre.config.paths import resolve
 
 __all__ = [
     "MatrixE2EEBootstrapResult",

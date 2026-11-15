@@ -19,6 +19,33 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from medre.core.contracts.adapter import (
+    MAX_ADAPTER_RETRY_AFTER_SECONDS,
+    AdapterCapabilities,
+    AdapterContext,
+    AdapterContract,
+    AdapterInfo,
+    AdapterPermanentError,
+    AdapterRole,
+    AdapterSendError,
+)
+from medre.core.contracts.delivery import AdapterHandoffResult
+from medre.core.contracts.typing import TypingSnapshot, TypingUpdate
+from medre.core.events.attachments import ATTACHMENT_PAYLOAD_KEY
+from medre.core.events.kinds import EventKind
+from medre.core.ingress import (
+    AttachmentTransferPermitTimeoutError,
+    DurableIngressDeferredError,
+    InboundAttachmentContent,
+    IngressProvenance,
+)
+from medre.core.ingress.content import AttachmentContentUnavailableError
+from medre.core.policies.startup_backlog_suppress import (
+    should_suppress_startup_backlog,
+)
+from medre.core.rendering.renderer import RenderingResult
+from msgspec import structs as _msgspec_structs
+
 from medre.adapters.matrix.codec import MatrixCodec
 from medre.adapters.matrix.compat import HAS_NIO
 from medre.adapters.matrix.device_trust import (
@@ -53,32 +80,6 @@ from medre.adapters.matrix.outbound import (
 from medre.adapters.matrix.relations import MatrixRelationHandler
 from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.contracts.adapter import (
-    MAX_ADAPTER_RETRY_AFTER_SECONDS,
-    AdapterCapabilities,
-    AdapterContext,
-    AdapterContract,
-    AdapterInfo,
-    AdapterPermanentError,
-    AdapterRole,
-    AdapterSendError,
-)
-from medre.core.contracts.delivery import AdapterHandoffResult
-from medre.core.events.attachments import ATTACHMENT_PAYLOAD_KEY
-from medre.core.events.kinds import EventKind
-from medre.core.policies.startup_backlog_suppress import (
-    should_suppress_startup_backlog,
-)
-from medre.core.ingress import (
-    DurableIngressDeferredError,
-    AttachmentTransferPermitTimeoutError,
-    InboundAttachmentContent,
-    IngressProvenance,
-)
-from medre.core.ingress.content import AttachmentContentUnavailableError
-from medre.core.contracts.typing import TypingSnapshot, TypingUpdate
-from medre.core.rendering.renderer import RenderingResult
-from msgspec import structs as _msgspec_structs
 
 _logger = logging.getLogger(__name__)
 

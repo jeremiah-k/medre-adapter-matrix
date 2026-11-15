@@ -16,6 +16,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from medre.core.contracts.adapter import AdapterContext
+from medre.core.events import CanonicalEvent, EventMetadata
+from medre.core.rendering.renderer import RenderingContext
+from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload_content
+
 from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.codec import MatrixCodec
 from medre.adapters.matrix.errors import MatrixConnectionError
@@ -23,10 +28,6 @@ from medre.adapters.matrix.identity import MatrixCrossSigningService
 from medre.adapters.matrix.renderer import MatrixRenderer
 from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.contracts.adapter import AdapterContext
-from medre.core.events import CanonicalEvent, EventMetadata
-from medre.core.rendering.renderer import RenderingContext
-from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload_content
 
 
 def _matrix_config(**overrides: Any) -> MatrixConfig:

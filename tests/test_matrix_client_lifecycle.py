@@ -5,10 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
 from medre.adapters.matrix.client_lifecycle import close_matrix_client
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.session import MatrixSession
-from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 
 def _database() -> SimpleNamespace:

@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.core.ingress import AdmissionResult
 from medre_matrix_tests.helpers.matrix_adapter import (
     make_adapter_context,
@@ -15,6 +14,8 @@ from medre_matrix_tests.helpers.matrix_adapter import (
     make_matrix_config,
     to_event_dict,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter
 
 
 async def test_durable_storage_failure_propagates_to_nio_admission_owner() -> None:

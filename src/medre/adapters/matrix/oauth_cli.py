@@ -10,6 +10,7 @@ from medre.adapters.matrix.auth import (
     _normalize_homeserver,
     extract_domain_from_mxid,
 )
+from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.oauth import (
     DeviceAuthorization,
     MatrixOAuthClient,
@@ -17,7 +18,6 @@ from medre.adapters.matrix.oauth import (
     OAuthSession,
     matches_user,
 )
-from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.oauth_session import (
     OAuthSessionManager,
     credential_lock,
@@ -156,9 +156,10 @@ async def logout_credentials() -> None:
             await MatrixOAuthClient().revoke(session)
         else:
             import asyncio
+
             from medre.adapters.matrix.auth import (
-                matrix_logout,
                 check_credentials_completeness,
+                matrix_logout,
             )
 
             if record.get("auth_type") not in (

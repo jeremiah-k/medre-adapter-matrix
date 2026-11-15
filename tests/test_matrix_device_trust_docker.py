@@ -43,13 +43,6 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.compat import HAS_E2EE
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.adapters.matrix.session import MatrixSession
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import AdapterContext, AdapterSendError
 from medre.core.engine.pipeline import PipelineConfig, PipelineRunner
 from medre.core.events.bus import EventBus
@@ -62,6 +55,13 @@ from medre.core.storage.sqlite.storage import SQLiteStorage
 from medre.core.supervision.accounting import RuntimeAccounting
 from medre_matrix_tests.helpers.async_utils import wait_until
 from medre_matrix_tests.helpers.matrix import matrix_send_payload
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.compat import HAS_E2EE
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix import MatrixConfig
 
 pytestmark = pytest.mark.docker
 

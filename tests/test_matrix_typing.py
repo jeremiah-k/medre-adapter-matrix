@@ -1,20 +1,20 @@
 """Transient native typing is scoped separately from canonical message delivery."""
 
 import asyncio
-from datetime import datetime, timezone
 import logging
 import sys
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.session import MatrixSession
-from medre.adapters.matrix.errors import MatrixConnectionError
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import AdapterContext, AdapterPermanentError
 from medre.core.contracts.typing import TypingSnapshot, TypingTarget, TypingUpdate
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.errors import MatrixConnectionError
+from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix import MatrixConfig
 
 ROOM = "!room:example.org"
 
@@ -138,8 +138,10 @@ async def test_fake_activity_uses_optional_sink_and_separate_bounded_history():
     """SDK-free fake contracts mirror native capability without message evidence."""
     import logging
     from datetime import datetime, timezone
+
     from medre.core.contracts.adapter import AdapterContext
     from medre.core.contracts.typing import TypingActivity
+
     from medre.adapters.fakes.matrix import FakeMatrixAdapter
 
     fake = FakeMatrixAdapter("fake")

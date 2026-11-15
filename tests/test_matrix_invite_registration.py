@@ -6,8 +6,9 @@ import sys
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
-from medre.adapters.matrix.session import MatrixSession
 from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
+from medre.adapters.matrix.session import MatrixSession
 
 
 def test_invite_registration_uses_nio_events_direct_import() -> None:

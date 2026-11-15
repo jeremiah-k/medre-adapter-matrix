@@ -3,14 +3,14 @@
 from datetime import datetime, timezone
 
 import pytest
-
-from medre.adapters.matrix.codec import MatrixCodec
-from medre.config.adapters.matrix import MatrixConfig
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.adapters.matrix.styling import from_html, render_payload, to_html
 from medre.core.events import CanonicalEvent, EventMetadata, EventRelation, NativeRef
 from medre.core.events.text import StyledText, TextSpan
 from medre.core.rendering.renderer import RenderingContext
+
+from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.adapters.matrix.styling import from_html, render_payload, to_html
+from medre.config.adapters.matrix import MatrixConfig
 
 
 def content(markup):

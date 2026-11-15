@@ -6,14 +6,14 @@ import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
-
-from medre.adapters.matrix import adapter as adapter_module
-from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.core.ingress import AdmissionResult, DurableIngressDeferredError
 from medre_matrix_tests.helpers.matrix_adapter import (
     make_adapter_context,
     make_matrix_config,
 )
+
+from medre.adapters.matrix import adapter as adapter_module
+from medre.adapters.matrix.adapter import MatrixAdapter
 
 EVENT = {
     "room_id": "!room:example.com",
