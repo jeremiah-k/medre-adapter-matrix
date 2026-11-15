@@ -18,20 +18,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.codec import MatrixCodec
-from medre.adapters.matrix.device_trust import PeerDeviceTrustReport
-from medre.adapters.matrix.outbound import (
-    MATRIX_OPERATION_KEY,
-    MatrixOutboundOperation,
-)
-from medre.adapters.matrix.renderer import (
-    MatrixAttachmentUnavailableError,
-    MatrixNativeMutationError,
-    MatrixRenderer,
-)
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import (
     AdapterContext,
     AdapterPermanentError,
@@ -51,6 +37,21 @@ from medre.core.ingress.content import (
     StoredAttachmentContent,
 )
 from medre.core.rendering.renderer import RenderingContext, RenderingResult
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.device_trust import PeerDeviceTrustReport
+from medre.adapters.matrix.outbound import (
+    MATRIX_OPERATION_KEY,
+    MatrixOutboundOperation,
+)
+from medre.adapters.matrix.renderer import (
+    MatrixAttachmentUnavailableError,
+    MatrixNativeMutationError,
+    MatrixRenderer,
+)
+from medre.config.adapters.matrix import MatrixConfig
 
 ROOM_ID = "!r:hs"
 SENDER = "@alice:hs"

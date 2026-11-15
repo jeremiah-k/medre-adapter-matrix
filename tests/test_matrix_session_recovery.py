@@ -14,9 +14,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.errors import MatrixConnectionError, MatrixSendError
-from medre.adapters.matrix.session import MatrixSession
 from medre.core.contracts.adapter import AdapterPermanentError, AdapterSendError
 from medre_matrix_tests.helpers.async_utils import bounded_cancel_and_reap, wait_until
 from medre_matrix_tests.helpers.matrix import matrix_send_payload
@@ -25,6 +22,10 @@ from medre_matrix_tests.helpers.matrix_session import (
     make_matrix_config,
     make_matrix_context,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.errors import MatrixConnectionError, MatrixSendError
+from medre.adapters.matrix.session import MatrixSession
 
 _STOP_TEST_WATCHDOG_SECONDS = 1.0
 

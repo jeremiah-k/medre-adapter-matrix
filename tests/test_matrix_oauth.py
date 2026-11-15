@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from medre_matrix_tests.helpers.oauth import Clock, make_session
 
 from medre.adapters.matrix.oauth import (
     API_SCOPE,
@@ -25,7 +26,6 @@ from medre.adapters.matrix.oauth_session import (
     credential_lock,
     manager_for_credentials,
 )
-from medre_matrix_tests.helpers.oauth import Clock, make_session
 from medre.config.adapters.matrix_credentials import (
     load_credentials_json,
     write_credentials_json,
@@ -450,6 +450,7 @@ async def test_oauth_http_bounds_bodies_and_refuses_redirects(
     monkeypatch, status, contents
 ):
     import aiohttp
+
     from medre.adapters.matrix.oauth import OAuthHTTP
 
     observed = {}
@@ -497,7 +498,9 @@ async def test_oauth_http_bounds_bodies_and_refuses_redirects(
 def test_saved_oauth_envelope_matches_published_schema():
     import json
     from pathlib import Path
+
     import jsonschema
+
     from medre.adapters.matrix.oauth import OAuthSession
 
     schema = json.loads(

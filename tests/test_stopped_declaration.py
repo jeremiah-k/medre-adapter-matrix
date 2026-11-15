@@ -8,10 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from medre.maintenance.stopped_declare import ExclusionRefused, declaration_from_spec
 
 from medre.adapters.matrix import stopped_declaration as module
 from medre.adapters.matrix.plugin import adapter_spec
-from medre.maintenance.stopped_declare import ExclusionRefused, declaration_from_spec
 
 
 def settings(tmp_path, **overrides):

@@ -20,8 +20,6 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events import (
     CanonicalEvent,
     EventMetadata,
@@ -31,6 +29,9 @@ from medre.core.events import (
 from medre.core.planning.delivery_plan import DeliveryStrategyMethod
 from medre.core.rendering.renderer import RenderingContext
 from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload_content
+
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.config.adapters.matrix import MatrixConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

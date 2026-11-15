@@ -18,9 +18,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.session import MatrixSession
-from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 # ===================================================================
 # is_room_member

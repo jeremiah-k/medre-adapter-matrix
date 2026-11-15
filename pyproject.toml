@@ -83,3 +83,6 @@ follow_imports = "silent"
 [[tool.mypy.overrides]]
 module = ["aiohttp", "aiohttp.*", "nio", "nio.*"]
 ignore_missing_imports = true
+
+[tool.isort]
+profile = "black"

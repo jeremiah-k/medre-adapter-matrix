@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
 from medre.adapters.matrix.session import (
     MatrixSession,
     _event_classes_by_name,

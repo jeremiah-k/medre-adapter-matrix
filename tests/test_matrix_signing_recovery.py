@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from test_matrix_cross_signing_identity import FakeClient, FakeIdentity
 
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.identity import MatrixCrossSigningService
@@ -17,7 +18,6 @@ from medre.adapters.matrix.signing_recovery import (
     load_signing_backup,
     restore_signing_backup,
 )
-from test_matrix_cross_signing_identity import FakeClient, FakeIdentity
 
 
 @pytest.mark.parametrize(
@@ -336,6 +336,7 @@ async def test_runtime_guidance_matches_failure_category(
 ):
     """A device repair or initial bootstrap must never recommend resetting account keys."""
     import logging
+
     from medre.adapters.matrix.identity import MatrixCrossSigningDiagnostics
     from medre.adapters.matrix.session import MatrixSession
     from medre.config.adapters.matrix import MatrixConfig
@@ -441,8 +442,8 @@ def test_dangling_signing_symlink_is_not_reported_missing(tmp_path, monkeypatch)
 
 def test_signing_status_failure_does_not_claim_an_import(monkeypatch, capsys):
     """Read-only status exceptions must never suggest keys were published."""
-    from medre.adapters.matrix.cli_contrib import _signing_command
     from medre.adapters.matrix import signing_cli
+    from medre.adapters.matrix.cli_contrib import _signing_command
 
     monkeypatch.setattr(signing_cli, "signing_config", lambda *_: None)
 

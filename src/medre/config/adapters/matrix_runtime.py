@@ -3,8 +3,9 @@
 from dataclasses import dataclass
 from typing import Any, Self
 
-from medre.config.adapters.matrix import MatrixConfig
 from medre.config.model import GenericAdapterRuntimeConfig
+
+from medre.config.adapters.matrix import MatrixConfig
 
 
 @dataclass(frozen=True)

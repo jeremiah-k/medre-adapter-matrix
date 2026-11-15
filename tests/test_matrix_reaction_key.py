@@ -3,9 +3,10 @@
 from datetime import datetime, timezone
 
 import pytest
-from medre.adapters.matrix.renderer import MatrixRenderer
 from medre.core.events import CanonicalEvent, EventMetadata, EventRelation, NativeRef
 from medre.core.rendering.renderer import RenderingContext
+
+from medre.adapters.matrix.renderer import MatrixRenderer
 
 
 def reaction(key, bound):

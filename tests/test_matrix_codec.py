@@ -8,11 +8,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from medre.core.events.kinds import EventKind
+
 from medre.adapters.matrix.codec import MatrixCodec
 from medre.adapters.matrix.errors import MatrixCodecError
 from medre.adapters.matrix.metadata import MATRIX_METADATA_ENVELOPE_SCHEMA_VERSION
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.events.kinds import EventKind
 
 
 def _make_config(**overrides: Any) -> MatrixConfig:

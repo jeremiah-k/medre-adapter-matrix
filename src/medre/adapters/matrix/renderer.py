@@ -34,11 +34,6 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Mapping
 
-from msgspec.structs import replace as replace_event
-
-from .styling import render_payload, source_text
-from medre.adapters.matrix.metadata import build_matrix_metadata_content
-from medre.adapters.matrix.outbound import MatrixOutboundOperation
 from medre.adapters.metadata import project_source_fields
 from medre.core.events import CanonicalEvent, EventRelation
 from medre.core.events.attachments import (
@@ -47,14 +42,14 @@ from medre.core.events.attachments import (
 from medre.core.events.kinds import EventKind
 from medre.core.rendering.attribution import (
     RelayAttribution,
-    resolve_relay_attribution,
     format_checked_relay_prefix,
+    resolve_relay_attribution,
 )
 from medre.core.rendering.relations import (
     compose_relation_text,
     describe_reaction,
-    reaction_key,
     destination_native_message_id,
+    reaction_key,
 )
 from medre.core.rendering.renderer import (
     RenderingContext,
@@ -65,6 +60,12 @@ from medre.core.rendering.text_helpers import (
     truncate_text,
     truncate_text_bytes,
 )
+from msgspec.structs import replace as replace_event
+
+from medre.adapters.matrix.metadata import build_matrix_metadata_content
+from medre.adapters.matrix.outbound import MatrixOutboundOperation
+
+from .styling import render_payload, source_text
 
 # Transport-neutral media kind → Matrix wire msgtype.  Unknown or missing
 # kinds deliberately fall back to ``m.file`` — never a guessed image/exec.

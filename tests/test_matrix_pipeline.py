@@ -11,9 +11,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import cast
 
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.fakes.presentation import FakePresentationAdapter
-from medre.adapters.matrix.renderer import MatrixRenderer
 from medre.core.contracts.adapter import AdapterContext
 from medre.core.engine.pipeline import PipelineConfig, PipelineRunner
 from medre.core.events import CanonicalEvent, EventMetadata, NativeMessageRef, NativeRef
@@ -25,6 +22,10 @@ from medre.core.routing import Route, Router, RouteSource, RouteTarget
 from medre.core.storage.backend import StorageBackend
 from medre.core.storage.sqlite.storage import SQLiteStorage
 from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload_content
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.fakes.presentation import FakePresentationAdapter
+from medre.adapters.matrix.renderer import MatrixRenderer
 
 # ---------------------------------------------------------------------------
 # Helpers

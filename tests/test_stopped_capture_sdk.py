@@ -9,16 +9,16 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
-from medre.adapters.matrix import stopped_declaration as declaration
 from medre.core.events import CanonicalEvent, EventMetadata, NativeMessageRef
 from medre.core.events.delivery import DeliveryAttemptProvenance
 from medre.core.rendering.radio_text import plan_radio_text
 from medre.core.storage.backend import DeliveryOutboxItem
 from medre.core.storage.sqlite.storage import SQLiteStorage
-from medre.adapters.matrix.plugin import adapter_spec
 from medre.maintenance import stopped_declare as maintenance
 from medre.maintenance.stopped_snapshot import restore_stopped_snapshot
+
+from medre.adapters.matrix import stopped_declaration as declaration
+from medre.adapters.matrix.plugin import adapter_spec
 
 pytestmark = pytest.mark.matrix_sdk
 

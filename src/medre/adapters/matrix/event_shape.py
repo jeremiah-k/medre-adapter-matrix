@@ -16,14 +16,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import msgspec
-
-from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 from medre.adapters.metadata import current_namespace as _current_namespace
 from medre.adapters.metadata import versioned_namespace as _versioned_namespace
 from medre.core.events.attachments import (
     ATTACHMENT_KINDS,
     AttachmentDescriptor,
 )
+
+from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 
 MATRIX_NATIVE_NAMESPACE = "matrix"
 MATRIX_NATIVE_SCHEMA_VERSION = 1

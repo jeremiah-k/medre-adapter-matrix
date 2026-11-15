@@ -7,12 +7,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from medre.core.contracts.adapter import AdapterContext
+from medre_matrix_tests.helpers.async_utils import wait_until
 
 from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.contracts.adapter import AdapterContext
-from medre_matrix_tests.helpers.async_utils import wait_until
 
 
 @pytest.fixture

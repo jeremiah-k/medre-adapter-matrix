@@ -7,12 +7,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from medre.core.ingress.types import DurableIngressDeferredError
+
 from medre.adapters.matrix.durable_sync import (
     MatrixBatchConsumer,
     _canonical_homeserver,
 )
 from medre.adapters.matrix.errors import MatrixAttachmentFetchDeferredError
-from medre.core.ingress.types import DurableIngressDeferredError
 
 
 @pytest.mark.parametrize(
@@ -90,9 +91,10 @@ async def test_owned_oauth_binding_survives_token_rotation_and_canonical_alias(
 ):
     """Rotating secrets do not invalidate a verified account/device binding."""
     import nio
+    from medre_matrix_tests.helpers.oauth import make_session
+
     import medre.adapters.matrix.durable_sync as durable
     import medre.config.adapters.matrix_credentials as credentials
-    from medre_matrix_tests.helpers.oauth import make_session
 
     user, device = "@relay:example", "MEDRE_device"
     configured, actual = "https://ALIAS.example:443/", "https://server.example"
@@ -142,9 +144,10 @@ async def test_owned_oauth_binding_survives_token_rotation_and_canonical_alias(
 async def test_owned_oauth_binding_rejects_another_device(tmp_path):
     """A manager for another device cannot authorize alias ownership."""
     import nio
-    from nio.exceptions import LocalProtocolError
-    from medre.adapters.matrix.durable_sync import open_sync
     from medre_matrix_tests.helpers.oauth import make_session
+    from nio.exceptions import LocalProtocolError
+
+    from medre.adapters.matrix.durable_sync import open_sync
 
     session = make_session()
     client = nio.AsyncClient(

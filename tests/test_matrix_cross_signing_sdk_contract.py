@@ -69,6 +69,7 @@ async def test_real_crypto_store_reuses_account_identity_for_fresh_device(tmp_pa
         CrossSigningIdentity,
         cross_signing_sidecar_path,
     )
+
     from medre.adapters.matrix.client_lifecycle import close_matrix_client
     from medre.adapters.matrix.identity import MatrixCrossSigningService
 

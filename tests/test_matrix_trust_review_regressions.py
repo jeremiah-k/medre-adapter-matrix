@@ -9,6 +9,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from medre.core.contracts.adapter import AdapterContext
+
 from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.device_trust import (
     PeerDeviceTrustReport,
@@ -18,7 +20,6 @@ from medre.adapters.matrix.device_trust import (
 from medre.adapters.matrix.session import MatrixSession
 from medre.config.adapters.matrix import MatrixConfig
 from medre.config.adapters.matrix_errors import MatrixConfigError
-from medre.core.contracts.adapter import AdapterContext
 
 
 def _adapter() -> MatrixAdapter:

@@ -11,11 +11,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.errors import MatrixConnectionError
-from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
-from medre.adapters.matrix.session import MatrixSession
-from medre.config.adapters.matrix_errors import MatrixConfigError
 from medre_matrix_tests.helpers.matrix_adapter import (
     make_adapter_context as _make_adapter_context,
 )
@@ -30,6 +25,12 @@ from medre_matrix_tests.helpers.matrix_adapter import (
     make_matrix_config as _make_matrix_config,
 )
 from medre_matrix_tests.helpers.matrix_adapter import to_event_dict as _to_event_dict
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.errors import MatrixConnectionError
+from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
+from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix_errors import MatrixConfigError
 
 
 class TestStartupHistorySuppression:

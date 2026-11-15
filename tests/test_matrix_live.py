@@ -326,8 +326,9 @@ class TestMatrixLiveSmoke:
         - The event_id follows the Matrix convention of starting with ``$``.
         - ``native_channel_id`` matches the target room.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = _make_context()
@@ -372,8 +373,9 @@ class TestMatrixLiveSmoke:
         A single ordered round-trip that validates the complete adapter
         lifecycle in one test, catching ordering or state-leak bugs.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = _make_context()
@@ -478,9 +480,10 @@ class TestMatrixLiveSmoke:
         ``test_matrix_lifecycle.py`` provide deterministic coverage of the
         sender-check suppression path.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         publish_mock = AsyncMock()
         ctx = AdapterContext(
@@ -575,9 +578,10 @@ class TestMatrixLiveSmoke:
         tests in ``test_matrix_lifecycle.py`` and ``test_matrix_codec.py``
         isolate the allowlist check from self-message suppression.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         wrong_allowlist = {"!nonexistent-room:example.com"}
 
@@ -696,8 +700,9 @@ class TestMatrixLiveSmoke:
         - ``health == "unknown"`` (client is None)
         - ``platform`` and ``role`` still populated
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext, AdapterRole
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = AdapterContext(
@@ -744,8 +749,9 @@ class TestMatrixLiveSmoke:
         This catches state leaks, stale client references, and unclean
         shutdown that would prevent a second start.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         config = _make_config()
 
@@ -807,9 +813,10 @@ class TestMatrixLiveSmoke:
         and receive a new native ``event_id``.  See ``test_replay_engine_modes.py``
         for the replay engine tests.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = AdapterContext(
@@ -914,8 +921,9 @@ class TestMatrixLiveSmoke:
         **xfail** if no third-party message arrives within 30 s (sync
         delay, missing sender, quiet room).
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         inbound_sender = os.environ.get("MATRIX_INBOUND_SENDER")
 
@@ -1026,9 +1034,10 @@ class TestMatrixLiveSmoke:
         This test does NOT depend on a second user — it only verifies that
         the diagnostics snapshot is structurally complete and consistent.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = AdapterContext(
@@ -1139,8 +1148,9 @@ class TestMatrixLiveSmoke:
         timeout (default 5.0s).  This catches resource leaks (e.g. unclosed
         aiohttp sessions, dangling sync tasks) that prevent clean shutdown.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = AdapterContext(
@@ -1180,9 +1190,10 @@ class TestMatrixLiveLocalSynapse:
         - ``native_channel_id`` matches MATRIX_ROOM_ID.
         - All operations complete within bounded timeouts.
         """
-        from medre.adapters.matrix.adapter import MatrixAdapter
         from medre.core.contracts.adapter import AdapterContext
         from medre.core.rendering.renderer import RenderingResult
+
+        from medre.adapters.matrix.adapter import MatrixAdapter
 
         adapter = MatrixAdapter(_make_config())
         ctx = AdapterContext(

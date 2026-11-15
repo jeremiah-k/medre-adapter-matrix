@@ -13,14 +13,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.fakes.presentation import FakePresentationAdapter
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.codec import MatrixCodec
-from medre.adapters.matrix.errors import MatrixSendError
-from medre.adapters.matrix.outbound import MatrixOutboundOperation
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import (
     AdapterHandoffResult,
     AdapterPermanentError,
@@ -37,6 +29,15 @@ from medre_matrix_tests.fixtures.matrix_packets import (
 from medre_matrix_tests.helpers.matrix_adapter import (
     wire_mock_session as _wire_mock_session,
 )
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.fakes.presentation import FakePresentationAdapter
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.errors import MatrixSendError
+from medre.adapters.matrix.outbound import MatrixOutboundOperation
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.config.adapters.matrix import MatrixConfig
 
 
 def _send_payload(content: dict[str, object]) -> dict[str, object]:
@@ -186,11 +187,12 @@ class TestMatrixBoundaries:
         temp_storage,
     ) -> None:
         """Failed Matrix delivery must not store an outbound native ref."""
-        from medre.adapters.fakes.presentation import FaultyPresentationAdapter
         from medre.core.engine.pipeline import PipelineConfig, PipelineRunner
         from medre.core.events.bus import EventBus
         from medre.core.planning import FallbackResolver, RelationResolver
         from medre.core.routing import Route, Router, RouteSource, RouteTarget
+
+        from medre.adapters.fakes.presentation import FaultyPresentationAdapter
 
         adapter = FaultyPresentationAdapter(
             adapter_id="failing_matrix",

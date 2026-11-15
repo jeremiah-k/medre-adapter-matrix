@@ -12,6 +12,10 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from medre.core.ingress.types import AdapterCheckpoint, DurableIngressDeferredError
+from medre_matrix_tests.helpers.async_utils import wait_until
+from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
 from medre.adapters.matrix.durable_sync import (
     MatrixBatchAcceptanceError,
     MatrixBatchConsumer,
@@ -19,9 +23,6 @@ from medre.adapters.matrix.durable_sync import (
     open_sync,
 )
 from medre.adapters.matrix.session import MatrixSession
-from medre.core.ingress.types import AdapterCheckpoint, DurableIngressDeferredError
-from medre_matrix_tests.helpers.async_utils import wait_until
-from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 
 class Owner:
@@ -810,11 +811,12 @@ async def test_consumer_id_canonicalizes_alias_and_reopens_legacy_store(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Verified credential aliases must preserve the original SDK ownership."""
+    from uuid import NAMESPACE_URL, uuid5
+
     import nio
     from nio.durable import DurableSyncConfig, open_durable_sync
     from nio.exceptions import LocalProtocolError
     from nio.store import DefaultStore
-    from uuid import NAMESPACE_URL, uuid5
 
     import medre.adapters.matrix.durable_sync as durable
 

@@ -17,10 +17,11 @@ import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from medre.adapters.matrix.session import MatrixSession
 from medre_matrix_tests.helpers.matrix_session import (
     make_matrix_config,
 )
+
+from medre.adapters.matrix.session import MatrixSession
 
 # ===================================================================
 # Shared helpers

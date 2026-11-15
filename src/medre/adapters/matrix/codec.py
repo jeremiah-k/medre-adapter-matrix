@@ -19,7 +19,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
-from .styling import from_html
+from medre.core.contracts.adapter import AdapterCodec
+from medre.core.events.canonical import CanonicalEvent, EventRelation, NativeRef
+from medre.core.events.kinds import EventKind
+from medre.core.events.metadata import EventMetadata, NativeMetadata, TransportMetadata
+
 from medre.adapters.matrix.errors import MatrixCodecError
 from medre.adapters.matrix.event_shape import (
     MEDIA_MSGTYPES,
@@ -31,10 +35,8 @@ from medre.adapters.matrix.relations import (
     strip_reply_fallback_body,
 )
 from medre.config.adapters.matrix import MatrixConfig
-from medre.core.contracts.adapter import AdapterCodec
-from medre.core.events.canonical import CanonicalEvent, EventRelation, NativeRef
-from medre.core.events.kinds import EventKind
-from medre.core.events.metadata import EventMetadata, NativeMetadata, TransportMetadata
+
+from .styling import from_html
 
 _MEDIA_MSGTYPES = frozenset(MEDIA_MSGTYPES)
 _MAX_ORIGIN_SERVER_TS_MS = 253_402_300_799_999  # 9999-12-31T23:59:59.999Z

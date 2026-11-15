@@ -13,9 +13,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from medre.adapters.matrix.codec import MatrixCodec
-from medre.adapters.matrix.event_shape import MATRIX_NATIVE_SCHEMA_VERSION
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events import (
     CanonicalEvent,
     DeliveryReceipt,
@@ -26,6 +23,10 @@ from medre.core.events import (
 )
 from medre.core.events.metadata import NativeMetadata
 from medre_matrix_tests.helpers.native_metadata import matrix_native_data
+
+from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.event_shape import MATRIX_NATIVE_SCHEMA_VERSION
+from medre.config.adapters.matrix import MatrixConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

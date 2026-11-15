@@ -26,7 +26,6 @@ from __future__ import annotations
 from typing import Literal, Mapping
 
 import msgspec
-
 from medre.core.events.attachments import CONTENT_REF_PATTERN
 
 #: The single closed payload key under which the operation travels.

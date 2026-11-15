@@ -27,13 +27,14 @@ import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.errors import MatrixConnectionError
-from medre.adapters.matrix.session import MatrixSession, MatrixSessionDiagnostics
 from medre_matrix_tests.helpers.matrix_session import (
     make_matrix_config,
     make_matrix_context,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.errors import MatrixConnectionError
+from medre.adapters.matrix.session import MatrixSession, MatrixSessionDiagnostics
 
 # ===================================================================
 # TestMatrixSessionLifecycle

@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from medre.adapters.matrix.auth import (
     _HTTP_TIMEOUT_SECONDS,
     MatrixLoginResult,

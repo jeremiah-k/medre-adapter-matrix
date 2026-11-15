@@ -44,10 +44,6 @@ import logging
 import uuid
 from typing import Any
 
-from medre.adapters.matrix.outbound import (
-    MatrixOutboundEnvelopeError,
-    MatrixOutboundOperation,
-)
 from medre.core.contracts.adapter import (
     AdapterCapabilities,
     AdapterContext,
@@ -65,6 +61,11 @@ from medre.core.events.canonical import (
 )
 from medre.core.events.kinds import EventKind
 from medre.core.rendering.renderer import RenderingResult
+
+from medre.adapters.matrix.outbound import (
+    MatrixOutboundEnvelopeError,
+    MatrixOutboundOperation,
+)
 
 _logger = logging.getLogger(__name__)
 

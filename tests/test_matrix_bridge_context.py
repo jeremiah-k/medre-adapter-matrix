@@ -6,13 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
 import msgspec
+import pytest
 from jsonschema import Draft202012Validator
-from medre.adapters.matrix.bridge_context import normalize_bridge_context
-from medre.adapters.matrix.codec import MatrixCodec
-from medre.adapters.matrix.metadata import build_matrix_metadata_content
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.events import (
     CanonicalEvent,
     EventMetadata,
@@ -20,6 +16,11 @@ from medre.core.events import (
     NativeMetadata,
     NativeRef,
 )
+
+from medre.adapters.matrix.bridge_context import normalize_bridge_context
+from medre.adapters.matrix.codec import MatrixCodec
+from medre.adapters.matrix.metadata import build_matrix_metadata_content
+from medre.config.adapters.matrix import MatrixConfig
 
 
 def event(platform):
@@ -266,9 +267,10 @@ def test_invalid_envelope_unicode_cannot_poison_authored_message(field):
 async def test_context_attribution_preserves_registry_origin_fallback(
     context_label, snapshot_label
 ):
-    from medre.adapters.matrix.renderer import MatrixRenderer
     from medre.core.rendering.attribution import RelayAttribution
     from medre.core.rendering.renderer import RenderingContext
+
+    from medre.adapters.matrix.renderer import MatrixRenderer
 
     renderer = MatrixRenderer(
         source_attribution={

@@ -5,9 +5,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from medre_matrix_tests.helpers.matrix_adapter import make_matrix_config
 
 from medre.adapters.matrix.runtime import prepare_matrix_runtime_config
-from medre_matrix_tests.helpers.matrix_adapter import make_matrix_config
 
 
 def _route(source_channel: str, *, enabled: bool = True) -> SimpleNamespace:

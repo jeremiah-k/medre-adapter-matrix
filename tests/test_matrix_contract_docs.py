@@ -1,8 +1,8 @@
 """Prevent current Matrix SDK requirements drifting from the spec."""
 
-from pathlib import Path
 import re
 import tomllib
+from pathlib import Path
 
 import pytest
 

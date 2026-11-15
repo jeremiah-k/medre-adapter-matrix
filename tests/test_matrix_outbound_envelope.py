@@ -9,6 +9,7 @@ strict payload decoding.
 from __future__ import annotations
 
 import pytest
+
 from medre.adapters.matrix.outbound import (
     MATRIX_OPERATION_KEY,
     MatrixOutboundEnvelopeError,

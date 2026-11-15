@@ -57,6 +57,7 @@ async def test_classic_joined_members_completes_the_preflight_view(monkeypatch) 
     from unittest.mock import AsyncMock
 
     import nio
+
     from medre.adapters.matrix.session import MatrixSession
     from medre.config.adapters.matrix import MatrixConfig
 
@@ -103,6 +104,7 @@ async def test_durable_joined_members_populates_cache_not_room_projection() -> N
     from nio.crypto import OlmDevice, TrustState
     from nio.crypto.device import DeviceStore
     from nio.durable.outbound import OutboundCrypto
+
     from medre.adapters.matrix.session import MatrixSession
     from medre.config.adapters.matrix import MatrixConfig
 

@@ -29,12 +29,6 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from medre.adapters.fakes.matrix import FakeMatrixAdapter
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.errors import MatrixSendError
-from medre.adapters.matrix.outbound import MatrixOutboundOperation
-from medre.adapters.matrix.renderer import MatrixRenderer
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import (
     AdapterContext,
     AdapterHandoffResult,
@@ -57,6 +51,13 @@ from medre_matrix_tests.helpers.matrix import matrix_payload_content as _payload
 from medre_matrix_tests.helpers.matrix_adapter import (
     wire_mock_session as _wire_mock_session,
 )
+
+from medre.adapters.fakes.matrix import FakeMatrixAdapter
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.errors import MatrixSendError
+from medre.adapters.matrix.outbound import MatrixOutboundOperation
+from medre.adapters.matrix.renderer import MatrixRenderer
+from medre.config.adapters.matrix import MatrixConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

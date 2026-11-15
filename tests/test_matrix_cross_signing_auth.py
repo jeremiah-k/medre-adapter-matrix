@@ -13,11 +13,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from medre.cli.contrib import register_adapter_contributors
+
 from medre.adapters.matrix.auth import MatrixLoginResult
 from medre.adapters.matrix.e2ee_bootstrap import bootstrap_login_cross_signing
 from medre.adapters.matrix.errors import MatrixConnectionError
 from medre.adapters.matrix.identity import MatrixCrossSigningDiagnostics
-from medre.cli.contrib import register_adapter_contributors
 
 
 def _login_result() -> MatrixLoginResult:

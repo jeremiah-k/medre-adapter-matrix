@@ -23,12 +23,13 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from medre.adapters.matrix.adapter import MatrixAdapter  # noqa: F401
-from medre.adapters.matrix.identity import MatrixCrossSigningDiagnostics
-from medre.adapters.matrix.session import MatrixSession
 from medre_matrix_tests.helpers.matrix_session import (
     make_matrix_config,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter  # noqa: F401
+from medre.adapters.matrix.identity import MatrixCrossSigningDiagnostics
+from medre.adapters.matrix.session import MatrixSession
 
 
 async def test_e2ee_runtime_reconciles_cross_signing_without_rotation(

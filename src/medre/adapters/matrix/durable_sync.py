@@ -18,12 +18,14 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from medre.core.ingress.types import DurableIngressDeferredError
+
 from medre.adapters.matrix.errors import MatrixAttachmentFetchDeferredError
 
 if TYPE_CHECKING:
-    from medre.adapters.matrix.oauth import OAuthSession
     from nio import AsyncClient
     from nio.durable import DurableSync, SyncBatch, SyncRecord
+
+    from medre.adapters.matrix.oauth import OAuthSession
 
 # Callback tasks inherit the exact record, never another consumer's provenance.
 current_record: ContextVar[SyncRecord | None] = ContextVar(
@@ -119,10 +121,10 @@ def open_sync(
     refusal permits reopening the durable owner after a crash in the handoff.
     Other errors propagate, including outstanding legacy recovery at adoption.
     """
-    from nio.store import DefaultStore
     from nio.crypto import Olm
     from nio.durable import DurableSyncConfig, open_durable_sync
     from nio.exceptions import LocalProtocolError
+    from nio.store import DefaultStore
 
     # A verified sidecar binds discovered/delegated and configured base URLs to
     # the same login; never trust an unrelated account's credential record.

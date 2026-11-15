@@ -241,6 +241,7 @@ def dispatch_matrix_cli(args: Any) -> bool:
             return True
         if auth_command == "logout":
             import sys
+
             from medre.adapters.matrix.errors import MatrixConnectionError
             from medre.adapters.matrix.oauth import MatrixOAuthError
             from medre.adapters.matrix.oauth_cli import logout_credentials

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from medre.adapters.matrix.oauth import OAuthHTTP, MatrixOAuthError
+from medre.adapters.matrix.oauth import MatrixOAuthError, OAuthHTTP
 
 pytestmark = pytest.mark.matrix_sdk
 

@@ -12,8 +12,6 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.session import MatrixSession
 from medre.core.contracts.adapter import AdapterPermanentError
 from medre_matrix_tests.helpers.async_utils import wait_until
 from medre_matrix_tests.helpers.matrix import matrix_send_payload
@@ -22,6 +20,9 @@ from medre_matrix_tests.helpers.matrix_session import (
     make_matrix_config,
     make_matrix_context,
 )
+
+from medre.adapters.matrix.adapter import MatrixAdapter
+from medre.adapters.matrix.session import MatrixSession
 
 # ===================================================================
 # TestMegolmEventHandling
@@ -220,8 +221,9 @@ class TestEncryptedRoomSafety:
 
     async def test_e2ee_crypto_enabled_allows_send(self, mock_nio) -> None:
         """e2ee_required with crypto_enabled=True allows send even in encrypted room."""
-        import medre.adapters.matrix.compat as compat
         from medre.core.rendering.renderer import RenderingResult
+
+        import medre.adapters.matrix.compat as compat
 
         original = compat.HAS_E2EE
         try:

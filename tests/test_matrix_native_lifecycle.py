@@ -33,20 +33,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from medre.adapters.matrix.adapter import (
-    MatrixAdapter,
-    _matrix_redact_txn_id,
-    _matrix_txn_id,
-    _NioRateLimitError,
-)
-from medre.adapters.matrix.outbound import (
-    MATRIX_OPERATION_KEY,
-    MatrixOutboundEnvelopeError,
-    MatrixOutboundOperation,
-)
-from medre.adapters.matrix.renderer import MatrixNativeMutationError, MatrixRenderer
-from medre.adapters.matrix.session import MatrixSession
-from medre.config.adapters.matrix import MatrixConfig
 from medre.core.contracts.adapter import (
     AdapterCapabilities,
     AdapterContext,
@@ -66,6 +52,21 @@ from medre_matrix_tests.helpers.matrix_adapter import (
     wire_mock_session as _wire_mock_session,
 )
 from medre_matrix_tests.helpers.pipeline import make_event
+
+from medre.adapters.matrix.adapter import (
+    MatrixAdapter,
+    _matrix_redact_txn_id,
+    _matrix_txn_id,
+    _NioRateLimitError,
+)
+from medre.adapters.matrix.outbound import (
+    MATRIX_OPERATION_KEY,
+    MatrixOutboundEnvelopeError,
+    MatrixOutboundOperation,
+)
+from medre.adapters.matrix.renderer import MatrixNativeMutationError, MatrixRenderer
+from medre.adapters.matrix.session import MatrixSession
+from medre.config.adapters.matrix import MatrixConfig
 
 _ADAPTER = "matrix-1"
 _ROOM = "!room:server"
@@ -825,6 +826,7 @@ class TestRoomRedactSdkContract:
 
     def test_redact_error_has_no_event_id_and_classifies_permanent(self) -> None:
         import nio
+
         from medre.adapters.matrix.adapter import _is_nio_permanent_response
 
         error = nio.RoomRedactError.from_dict(

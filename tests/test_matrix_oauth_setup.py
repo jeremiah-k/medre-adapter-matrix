@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from medre_matrix_tests.helpers.oauth import Clock, make_session
 
 from medre.adapters.matrix.oauth import MatrixOAuthError
 from medre.adapters.matrix.oauth_approval import _challenge, signing_approval
@@ -15,7 +16,6 @@ from medre.config.adapters.matrix_credentials import (
     load_credentials_json,
     write_credentials_json,
 )
-from medre_matrix_tests.helpers.oauth import Clock, make_session
 
 
 @pytest.fixture
@@ -217,9 +217,9 @@ async def test_signing_wrapper_does_not_handle_other_endpoints():
 async def test_runtime_attaches_renewal_to_plaintext_and_e2ee_clients(
     tmp_path, monkeypatch
 ):
+    import medre.adapters.matrix.session as module
     from medre.adapters.matrix.session import MatrixSession
     from medre.config.adapters.matrix import MatrixConfig
-    import medre.adapters.matrix.session as module
 
     saved = make_session()
     path = tmp_path / "matrix.json"
@@ -352,6 +352,7 @@ async def test_oauth_manager_observes_other_process_rotation_and_logout(
 
 async def test_credential_lock_async_waits_then_releases(tmp_path, monkeypatch):
     import asyncio
+
     from medre.adapters.matrix.oauth_session import (
         credential_lock,
         credential_lock_async,
@@ -361,6 +362,7 @@ async def test_credential_lock_async_waits_then_releases(tmp_path, monkeypatch):
     entered = asyncio.Event()
     contended = asyncio.Event()
     from contextlib import contextmanager
+
     import medre.adapters.matrix.oauth_session as module
 
     @contextmanager
@@ -390,9 +392,10 @@ async def test_credential_lock_async_waits_then_releases(tmp_path, monkeypatch):
 async def test_configured_sidecar_credential_provenance_survives_token_refresh(
     tmp_path, monkeypatch
 ):
-    from medre.config.adapters.matrix import MatrixConfig
-    from medre.adapters.matrix.oauth_session import manager_for_credentials
     from dataclasses import replace
+
+    from medre.adapters.matrix.oauth_session import manager_for_credentials
+    from medre.config.adapters.matrix import MatrixConfig
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     path = tmp_path / "medre" / "credentials" / "matrix.json"
@@ -428,6 +431,7 @@ async def test_configured_sidecar_credential_provenance_survives_token_refresh(
 def test_password_logout_treats_only_unknown_token_401_as_success(monkeypatch):
     import io
     from urllib.error import HTTPError
+
     import medre.adapters.matrix.auth as auth
     from medre.adapters.matrix.errors import MatrixConnectionError
 
@@ -462,8 +466,9 @@ async def test_oauth_signing_bootstrap_budget_exceeds_browser_window(
 ):
     import sys
     from types import ModuleType
-    from medre.adapters.matrix.auth import MatrixLoginResult
+
     import medre.adapters.matrix.e2ee_bootstrap as bootstrap
+    from medre.adapters.matrix.auth import MatrixLoginResult
 
     saved = make_session()
     seen = []
@@ -521,6 +526,7 @@ async def test_oauth_signing_bootstrap_budget_exceeds_browser_window(
 
 async def test_initial_token_is_loaded_before_enabling_cache(tmp_path, monkeypatch):
     from dataclasses import replace
+
     import medre.adapters.matrix.oauth_session as module
 
     saved = make_session()
@@ -623,6 +629,7 @@ def test_explicit_token_override_discards_sidecar_renewal_authority(
     tmp_path, monkeypatch
 ):
     from dataclasses import fields, replace
+
     from medre.config.adapters.matrix import MatrixConfig
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
@@ -659,6 +666,7 @@ async def test_signing_retry_deadline_covers_http_and_body_reads(
     monkeypatch, blocked_phase
 ):
     import asyncio
+
     import medre.adapters.matrix.oauth_approval as module
 
     class BlockedContent:

@@ -8,6 +8,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from medre.core.ingress.types import AdapterCheckpoint
+from medre_matrix_tests.helpers.matrix_session import make_matrix_config
+
 from medre.adapters.matrix.errors import (
     MATRIX_ATTACHMENT_FETCH_DEFERRAL_COUNT_KEY,
     MatrixAttachmentFetchDeferredError,
@@ -16,8 +19,6 @@ from medre.adapters.matrix.session import (
     _ATTACHMENT_FETCH_DEFERRALS_MAX,
     MatrixSession,
 )
-from medre.core.ingress.types import AdapterCheckpoint
-from medre_matrix_tests.helpers.matrix_session import make_matrix_config
 
 
 def _durable_session(**overrides: object) -> MatrixSession:
