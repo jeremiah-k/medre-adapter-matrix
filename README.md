@@ -328,7 +328,7 @@ local device store counts as a trust gap. The default does not inspect that
 store. The adapter's own current device is handled by cross-signing, not
 peer-device authorization.
 
-Pre-release decision note: `permissive` is the default for compatibility, and
+Default policy note: `permissive` is the default for compatibility, and
 `strict` is NOT scheduled to become the default until a separate,
 independently qualified peer-verification workflow exists. Flipping that
 default is a deliberate, separately reviewed change; do not rely on the
