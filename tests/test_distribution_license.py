@@ -18,51 +18,39 @@ def test_license_metadata_matches_distributed_text():
     assert 'THE SOFTWARE IS PROVIDED "AS IS"' in license_text
 
 
-def test_dependency_license_disclosure_tracks_runtime_pins():
+def test_dependency_license_disclosure_references_the_declared_pin():
+    """The disclosure names the SDK and defers its version to pyproject.toml."""
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
     disclosure = (ROOT / "DEPENDENCY_LICENSES.md").read_text(encoding="utf-8")
-    for requirement in project["dependencies"]:
-        if requirement.startswith("medre>="):
-            continue
-        assert requirement.strip("'\"") in disclosure, requirement
-
-
-def test_renovate_disclosure_regex_matches_pinned_sdk_with_numeric_extras():
-    """Renovate must capture SDK names without extras while updating their pins."""
-    import json
-    import re
-
-    from packaging.requirements import Requirement
-    from packaging.utils import canonicalize_name
-
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    config = json.loads((ROOT / "renovate.json").read_text())
-    managers = [
-        manager
-        for manager in config["customManagers"]
-        if any("DEPENDENCY_LICENSES" in name for name in manager["managerFilePatterns"])
-    ]
-    assert len(managers) == 1
-    assert managers[0]["customType"] == "regex"
-    assert managers[0]["datasourceTemplate"] == "pypi"
-    matchers = [
-        re.compile(pattern.replace("(?<", "(?P<"))
-        for pattern in managers[0]["matchStrings"]
-    ]
-    disclosure = (ROOT / "DEPENDENCY_LICENSES.md").read_text()
-    matches = [match for regex in matchers for match in regex.finditer(disclosure)]
-    captured = {
-        (canonicalize_name(m.group("depName")), m.group("currentValue"))
-        for m in matches
-    }
+    assert "pyproject.toml" in disclosure
     for raw in project["dependencies"]:
         dep = Requirement(raw)
         if canonicalize_name(dep.name) == "medre":
             continue
-        assert len(dep.specifier) == 1
+        assert dep.name in disclosure, dep
         pin = next(iter(dep.specifier))
         assert pin.operator == "=="
-        assert (canonicalize_name(dep.name), pin.version) in captured
-    assert ("mindroom-nio", "1.3.0") in captured
+        # The disclosure never restates the version: a bump edits pyproject only.
+        assert str(dep) not in disclosure, dep
+        assert f"{dep.name}=={pin.version}" not in disclosure, dep
+
+
+def test_renovate_does_not_manage_the_license_disclosure():
+    """Renovate tracks pins in pyproject only; the disclosure is not a manifest."""
+    import json
+
+    config = json.loads((ROOT / "renovate.json").read_text())
+    managers = [
+        manager
+        for manager in config.get("customManagers", [])
+        if any(
+            "DEPENDENCY_LICENSES" in pattern
+            for pattern in manager.get("managerFilePatterns", [])
+        )
+    ]
+    assert managers == []
