@@ -4,13 +4,13 @@
 transport SDK, configuration, native codec and offline fake. MEDRE core owns
 routing, storage, lifecycle and delivery evidence.
 
-## Install from Git
+## Install
 
-Use [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git. For
-a first trial, MEDRE can manage this provider in its persistent tool environment:
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) to install
+MEDRE and this provider in the same persistent tool environment:
 
 ```bash
-uv tool install 'git+https://github.com/jeremiah-k/medre.git@main'
+uv tool install --python 3.12 medre
 medre adapters install matrix
 medre adapters
 ```
@@ -22,8 +22,10 @@ production sessions require a provider release with Windows lease support.
 
 On Windows, the package-changing command prints a uv command to run **after**
 `medre.exe` exits, rather than replacing an executable still in use.
-The `main` branch is useful for trials; pin exact core and adapter commits for
-repeatable operation. Use the [MEDRE Getting Started guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/getting-started.md)
+Core 0.1.1 and later use package-index defaults for new adapter requests.
+Existing saved Git requests and catalogs are preserved; Git is needed when
+using those sources. For reproducible deployments, pin released versions in
+a locked project or select exact Git revisions. Use the [MEDRE Getting Started guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/getting-started.md)
 for fake smoke, guided route creation and native setup. Use the
 [adapter-source guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/adapter-installation.md)
 for a locked uv deployment project, private Git, local checkouts, index sources,
@@ -146,7 +148,8 @@ storage, evidence, configuration orchestration, and installed-package discovery.
 Import the runtime wrapper from this distribution directly. Core has no named
 wrapper compatibility bridge or transport SDK extras. The supported MEDRE
 interface range and native SDK pins are declared in this project's
-`pyproject.toml`; use a matching core revision during pre-release development.
+`pyproject.toml`. Use a compatible released core, or the exact qualified
+core revision for development and native qualification.
 Community adapter authors can use their own distribution names, import packages,
 and hosting sources with the same `medre.adapters` entry-point contract.
 
@@ -328,7 +331,7 @@ local device store counts as a trust gap. The default does not inspect that
 store. The adapter's own current device is handled by cross-signing, not
 peer-device authorization.
 
-Pre-release decision note: `permissive` is the default for compatibility, and
+Default policy note: `permissive` is the default for compatibility, and
 `strict` is NOT scheduled to become the default until a separate,
 independently qualified peer-verification workflow exists. Flipping that
 default is a deliberate, separately reviewed change; do not rely on the
