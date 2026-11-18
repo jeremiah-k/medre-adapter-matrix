@@ -1,6 +1,6 @@
 """D2 docker qualification: encrypted outbound, restart identity, interrupted-send trichotomy.
 
-Four ordered scenarios on a real Synapse homeserver with real Megolm crypto,
+Five scenarios on a real Synapse homeserver with real Megolm crypto,
 driving the durable production shape (durable admission, durable outbox, retry
 worker, real Matrix adapter) rather than direct adapter calls:
 
@@ -8,7 +8,7 @@ worker, real Matrix adapter) rather than direct adapter calls:
   account, device and nio store) decrypts a pipeline-routed encrypted message
   and verifies intended content, conversation scope (room) and relation scope
   (``m.in_reply_to`` bound to the parent's native event ID).
-* Restart identity: process restart on durable state preserves the device
+* Restart identity: in-process session reopen on durable state preserves the device
   identity (olm account keys), the durable sync consumer binding, and the
   application checkpoint stream, each tied to the contract that requires it.
 * Interrupted send trichotomy: a server-refused submission (M_FORBIDDEN) is
@@ -42,15 +42,19 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from medre.config.model import RetryConfig
@@ -72,8 +76,9 @@ from medre.core.storage.sqlite.storage import SQLiteStorage
 from medre.core.supervision.accounting import RuntimeAccounting
 from medre.runtime.retry import RetryWorker
 from medre_matrix_tests.helpers.async_utils import wait_until
+from medre_matrix_tests.helpers.d2_proxy import SendResponseCutProxy
 
-from medre.adapters.matrix.adapter import MatrixAdapter, _matrix_txn_id
+from medre.adapters.matrix.adapter import MatrixAdapter
 from medre.adapters.matrix.compat import HAS_E2EE
 from medre.adapters.matrix.durable_sync import (
     _durable_database_name,
@@ -90,9 +95,7 @@ logger = logging.getLogger("medre.matrix.d2")
 
 _SYNAPSE_IMAGE = "matrixdotorg/synapse:v1.164.2"
 _SERVER_NAME = "medre-d2.local"
-_PORT = 38109
 _CONTAINER = "medre-d2-synapse"
-_RL_PORT = 38110
 _RL_CONTAINER = "medre-d2-ratelimit-synapse"
 _READY_TIMEOUT = 180
 
@@ -246,7 +249,6 @@ def _clear_root_owned(data_dir: Path) -> None:
 
 def _boot_synapse(
     container: str,
-    port: int,
     *,
     bot_localpart: str,
     bot_password: str,
@@ -255,83 +257,101 @@ def _boot_synapse(
     rc_message: dict[str, float] | None,
 ) -> Any:
     """Boot one Synapse container, two users and the scenario rooms."""
-    base_url = f"http://localhost:{port}"
-    parent = Path("/tmp") / f"medre-{container}"
-    parent.mkdir(parents=True, exist_ok=True)
+    container = f"{container}-{uuid4().hex[:12]}"
+    parent = Path(tempfile.mkdtemp(prefix="medre-d2-"))
     data_dir = parent / "synapse"
-    if data_dir.exists():
-        shutil.rmtree(data_dir, ignore_errors=True)
-        if data_dir.exists():
-            with contextlib.suppress(PermissionError):
-                _clear_root_owned(data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    _docker("rm", "-f", container, timeout=60)
-
-    _docker(
-        "run",
-        "--rm",
-        "-e",
-        f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
-        "-e",
-        "SYNAPSE_REPORT_STATS=no",
-        "-v",
-        f"{data_dir}:/data",
-        _SYNAPSE_IMAGE,
-        "generate",
-        timeout=180,
-    )
-    _docker(
-        "run",
-        "--rm",
-        "--user",
-        "root",
-        "--entrypoint",
-        "",
-        "-v",
-        f"{data_dir}:/data",
-        _SYNAPSE_IMAGE,
-        "chmod",
-        "-R",
-        "a+rw",
-        "/data",
-        timeout=90,
-    )
-
-    homeserver_yaml = data_dir / "homeserver.yaml"
-    with open(homeserver_yaml, "a", encoding="utf-8") as fh:
-        fh.write("\n# medre d2 qualification overrides\n")
-        fh.write("enable_registration: true\n")
-        fh.write("enable_registration_without_verification: true\n")
-        fh.write("rc_login:\n")
-        fh.write("  account:\n    per_second: 5\n    burst_count: 100\n")
-        fh.write("  address:\n    per_second: 5\n    burst_count: 100\n")
-        if rc_message is not None:
-            # Server-directed rate-limit scenario: a deliberately tiny,
-            # slow-refilling message bucket makes the homeserver itself emit
-            # M_LIMIT_EXCEEDED for the send that follows the first within the
-            # refill window, regardless of observation timing in between.
-            fh.write("rc_message:\n")
-            fh.write(f"  per_second: {rc_message['per_second']}\n")
-            fh.write(f"  burst_count: {rc_message['burst_count']}\n")
-
-    _docker(
-        "run",
-        "-d",
-        "--name",
-        container,
-        "-e",
-        f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
-        "-e",
-        "SYNAPSE_REPORT_STATS=no",
-        "-p",
-        f"{port}:8008",
-        "-v",
-        f"{data_dir}:/data",
-        _SYNAPSE_IMAGE,
-        timeout=180,
-    )
+    data_dir.mkdir(mode=0o700)
+    # Own all resources before running the first potentially failing command.
+    uid = os.getuid() or 991
+    gid = os.getgid() if os.getuid() else 991
+    identity = f"{uid}:{gid}"
     try:
+        _docker(
+            "run",
+            "--rm",
+            "-e",
+            f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
+            "-e",
+            "SYNAPSE_REPORT_STATS=no",
+            "-v",
+            f"{data_dir}:/data",
+            _SYNAPSE_IMAGE,
+            "generate",
+            timeout=180,
+        )
+        _docker(
+            "run",
+            "--rm",
+            "--user",
+            "root",
+            "--entrypoint",
+            "",
+            "-v",
+            f"{data_dir}:/data",
+            _SYNAPSE_IMAGE,
+            "chown",
+            "-R",
+            identity,
+            "/data",
+            timeout=90,
+        )
+
+        _docker(
+            "run",
+            "--rm",
+            "--user",
+            "root",
+            "--entrypoint",
+            "",
+            "-v",
+            f"{data_dir}:/data",
+            _SYNAPSE_IMAGE,
+            "chmod",
+            "-R",
+            "u=rwX,go=",
+            "/data",
+            timeout=90,
+        )
+
+        homeserver_yaml = data_dir / "homeserver.yaml"
+        with open(homeserver_yaml, "a", encoding="utf-8") as fh:
+            fh.write("\n# medre d2 qualification overrides\n")
+            fh.write("enable_registration: true\n")
+            fh.write("enable_registration_without_verification: true\n")
+            fh.write("rc_login:\n")
+            fh.write("  account:\n    per_second: 5\n    burst_count: 100\n")
+            fh.write("  address:\n    per_second: 5\n    burst_count: 100\n")
+            if rc_message is not None:
+                # Server-directed rate-limit scenario: a deliberately tiny,
+                # slow-refilling message bucket makes the homeserver itself emit
+                # M_LIMIT_EXCEEDED for the send that follows the first within the
+                # refill window, regardless of observation timing in between.
+                fh.write("rc_message:\n")
+                fh.write(f"  per_second: {rc_message['per_second']}\n")
+                fh.write(f"  burst_count: {rc_message['burst_count']}\n")
+
+        _docker(
+            "run",
+            "-d",
+            "--name",
+            container,
+            "--user",
+            identity,
+            "-e",
+            f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
+            "-e",
+            "SYNAPSE_REPORT_STATS=no",
+            "-p",
+            "127.0.0.1::8008",
+            "-v",
+            f"{data_dir}:/data",
+            _SYNAPSE_IMAGE,
+            timeout=180,
+        )
+        base_url = (
+            "http://" + _docker("port", container, "8008/tcp", timeout=15).strip()
+        )
+        assert urlsplit(base_url).hostname == "127.0.0.1"
         _wait_ready(base_url)
 
         for localpart, password in (
@@ -410,9 +430,15 @@ def _boot_synapse(
     finally:
         with contextlib.suppress(subprocess.SubprocessError, OSError):
             _docker("rm", "-f", container, timeout=90)
+        try:
+            shutil.rmtree(data_dir)
+        except PermissionError:
+            _clear_root_owned(data_dir)
+            shutil.rmtree(data_dir)
+        parent.rmdir()
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def d2_env() -> Any:
     """Main qualification homeserver with ordinary rate limits."""
     if not _docker_available():
@@ -421,7 +447,6 @@ def d2_env() -> Any:
         pytest.skip("mindroom-nio[e2e] is required for the D2 encrypted qualification")
     yield from _boot_synapse(
         _CONTAINER,
-        _PORT,
         bot_localpart=_BOT_LOCALPART,
         bot_password=_BOT_PASSWORD,
         peer_localpart=_PEER_LOCALPART,
@@ -430,7 +455,7 @@ def d2_env() -> Any:
     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def d2_rate_limit_env() -> Any:
     """Homeserver whose message bucket emits genuine M_LIMIT_EXCEEDED."""
     if not _docker_available():
@@ -439,12 +464,11 @@ def d2_rate_limit_env() -> Any:
         pytest.skip("mindroom-nio[e2e] is required for the D2 encrypted qualification")
     yield from _boot_synapse(
         _RL_CONTAINER,
-        _RL_PORT,
         bot_localpart=_RL_BOT_LOCALPART,
         bot_password=_RL_BOT_PASSWORD,
         peer_localpart=_RL_PEER_LOCALPART,
         peer_password=_RL_PEER_PASSWORD,
-        rc_message={"per_second": 0.1, "burst_count": 1},
+        rc_message={"per_second": 0.05, "burst_count": 1},
     )
 
 
@@ -473,7 +497,12 @@ async def _init_peer_client(
         user=peer_login["user_id"],
         device_id=peer_login["device_id"],
         store_path=store_path,
-        config=nio.AsyncClientConfig(encryption_enabled=True),
+        config=nio.AsyncClientConfig(
+            encryption_enabled=True,
+            max_timeouts=0,
+            max_limit_exceeded=0,
+            request_timeout=10,
+        ),
     )
     try:
         client.restore_login(
@@ -481,7 +510,8 @@ async def _init_peer_client(
             device_id=peer_login["device_id"],
             access_token=peer_login["access_token"],
         )
-        await client.sync(full_state=True)
+        initial = await asyncio.wait_for(client.sync(full_state=True), 20)
+        assert isinstance(initial, nio.SyncResponse), "recipient initial sync failed"
         if client.should_upload_keys:
             await client.keys_upload()
         if client.should_query_keys:
@@ -503,11 +533,9 @@ async def _peer_timeline(
 ) -> list[tuple[str, dict[str, Any]]]:
     """Sync the recipient and return decrypted (event_id, content) pairs.
 
-    The pinned nio fork exposes decrypted timeline events on the sync
-    response (``rooms.join[room_id].timeline.events``).  A Megolm event only
-    surfaces as RoomMessageText once the recipient's olm machine genuinely
-    decrypted it — this is recipient-side observation, never a sender-side
-    assert.
+    RoomMessageText also represents plaintext. Only the pinned SDK's
+    explicit decrypted flag qualifies receipt of encrypted content. Track
+    other sender message IDs separately to expose undecryptable duplicates.
 
     Syncs are incremental: every decrypted event is appended to a cumulative
     ``_d2_seen`` store on the client, because an event that arrives while an
@@ -517,12 +545,34 @@ async def _peer_timeline(
     peer_client._d2_seen = seen
     collected: list[tuple[str, dict[str, Any]]] = []
     for _ in range(attempts):
-        response = await peer_client.sync(timeout=3000)
+        response = await asyncio.wait_for(peer_client.sync(timeout=3000), 15)
+        if getattr(response, "next_batch", None) is None:
+            raise AssertionError("recipient sync failed; no observation made")
         join = getattr(getattr(response, "rooms", None), "join", None) or {}
         info = join.get(room_id)
         timeline = getattr(info, "timeline", None) if info is not None else None
+        if getattr(timeline, "limited", False):
+            raise AssertionError(
+                "recipient timeline is limited; observation is incomplete"
+            )
         for event in getattr(timeline, "events", None) or []:
-            if type(event).__name__ == "RoomMessageText":
+            sender = getattr(event, "sender", None)
+            event_id = getattr(event, "event_id", "")
+            if (
+                event_id
+                and sender
+                and (
+                    type(event).__name__ in {"RoomMessageText", "MegolmEvent"}
+                    or getattr(event, "decrypted", False)
+                )
+            ):
+                observed = getattr(peer_client, "_d2_message_events", {})
+                observed[event_id] = sender
+                peer_client._d2_message_events = observed
+            if (
+                type(event).__name__ == "RoomMessageText"
+                and getattr(event, "decrypted", False) is True
+            ):
                 source = getattr(event, "source", None) or {}
                 content = source.get("content") if isinstance(source, dict) else None
                 if not isinstance(content, dict):
@@ -538,11 +588,11 @@ async def _peer_find_body(
 ) -> list[str]:
     """Recipient-side observation: native event IDs whose decrypted body matches."""
     for _ in range(attempts):
-        seen: dict[str, dict[str, Any]] = getattr(peer_client, "_d2_seen", None) or {}
+        await _peer_timeline(peer_client, room_id, 1)
+        seen = peer_client._d2_seen
         matches = [
             event_id
-            for event_id, content in list(seen.items())
-            + await _peer_timeline(peer_client, room_id, 1)
+            for event_id, content in seen.items()
             if content.get("body") == body
         ]
         if matches:
@@ -601,154 +651,13 @@ async def _await_olm_session_with_peer(rig: D2Rig, peer_user_id: str) -> None:
 
 def _write_verdict(tmp_path: Path, name: str, verdict: dict[str, Any]) -> None:
     """Persist a sanitized verdict summary beside the other pytest evidence."""
-    with contextlib.suppress(OSError):
-        tmp_path.mkdir(parents=True, exist_ok=True)
-        (tmp_path / name).write_text(json.dumps(verdict, indent=2), encoding="utf-8")
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / name).write_text(json.dumps(verdict, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
 # Response-cut proxy: deterministic transport interruption below the SDK
 # ---------------------------------------------------------------------------
-
-
-class SendResponseCutProxy:
-    """Local TCP proxy that forwards everything to the homeserver.
-
-    While armed, once a room-send request has been *fully forwarded*, the
-    client-facing connection is closed without ever delivering the server's
-    response. The homeserver genuinely processes the send (it creates the
-    event and writes its response); the client observes a dropped connection.
-    This is deterministic fault injection below the SDK, kept strictly
-    separate from unmodified adapter and server behavior: nothing in the
-    adapter, the SDK, or Synapse is modified.
-    """
-
-    def __init__(self, target_host: str, target_port: int) -> None:
-        self._target = (target_host, target_port)
-        self._server: asyncio.Server | None = None
-        self._handlers: set[asyncio.Task] = set()
-        self.armed = True
-        self.cuts = 0
-        self.port: int | None = None
-
-    async def start(self) -> int:
-        def _spawn(reader: asyncio.StreamReader, writer: Any) -> None:
-            task = asyncio.create_task(self._handle(reader, writer))
-            self._handlers.add(task)
-            task.add_done_callback(self._handlers.discard)
-
-        self._server = await asyncio.start_server(_spawn, "127.0.0.1", 0)
-        self.port = self._server.sockets[0].getsockname()[1]
-        return self.port
-
-    async def close(self) -> None:
-        # Keep-alive handler tasks live as long as the homeserver's side of
-        # their connections, so Server.wait_closed() would wait on them
-        # unboundedly. Cancel the handlers explicitly for a bounded teardown.
-        server = self._server
-        self._server = None
-        if server is None:
-            return
-        server.close()
-        for task in list(self._handlers):
-            task.cancel()
-        if self._handlers:
-            with contextlib.suppress(Exception):
-                await asyncio.gather(*list(self._handlers), return_exceptions=True)
-
-    async def _handle(
-        self, client_reader: asyncio.StreamReader, client_writer: Any
-    ) -> None:
-        assert self.port is not None
-        try:
-            server_reader, server_writer = await asyncio.open_connection(*self._target)
-        except OSError:
-            with contextlib.suppress(OSError):
-                client_writer.close()
-            return
-
-        state = {"cut": False}
-
-        async def c2s() -> None:
-            scan = b""
-            matched = False
-            body_needed = 0
-            try:
-                while True:
-                    data = await client_reader.read(65536)
-                    if not data:
-                        break
-                    server_writer.write(data)
-                    await server_writer.drain()
-                    if not self.armed or state["cut"]:
-                        continue
-                    if matched:
-                        body_needed -= len(data)
-                        if body_needed <= 0:
-                            state["cut"] = True
-                            self.cuts += 1
-                            # The request is fully forwarded; the server will
-                            # process it. Drop the client side so the response
-                            # can never be delivered.
-                            client_writer.close()
-                    else:
-                        scan += data
-                        if b"\r\n\r\n" not in scan:
-                            continue
-                        head, _, rest = scan.partition(b"\r\n\r\n")
-                        request_line = head.split(b"\r\n", 1)[0]
-                        # Room sends arrive as PUT or POST depending on the
-                        # SDK path; both carry the event path with the txn id.
-                        send_method = request_line.startswith(b"PUT") or (
-                            request_line.startswith(b"POST")
-                        )
-                        if send_method and b"/send/m.room." in (
-                            request_line.split(b"?")[0]
-                        ):
-                            matched = True
-                            content_length = 0
-                            for line in head.split(b"\r\n"):
-                                if line.lower().startswith(b"content-length:"):
-                                    with contextlib.suppress(ValueError):
-                                        content_length = int(line.split(b":", 1)[1])
-                            body_needed = max(0, content_length - len(rest))
-                            if body_needed <= 0:
-                                # The request is already fully forwarded: cut
-                                # now. A send is a connection's last request,
-                                # so no later read would ever fire the cut and
-                                # the response would reach the client intact.
-                                state["cut"] = True
-                                self.cuts += 1
-                                client_writer.close()
-                        else:
-                            scan = b""
-            except (ConnectionError, OSError):
-                pass
-
-        async def s2c() -> None:
-            try:
-                while True:
-                    data = await server_reader.read(65536)
-                    if not data:
-                        break
-                    if state["cut"]:
-                        # Discard: the client connection is gone.
-                        continue
-                    client_writer.write(data)
-                    await client_writer.drain()
-            except (ConnectionError, OSError):
-                pass
-            finally:
-                with contextlib.suppress(OSError):
-                    server_writer.close()
-
-        try:
-            await asyncio.gather(c2s(), s2c())
-        finally:
-            with contextlib.suppress(OSError):
-                client_writer.close()
-            with contextlib.suppress(OSError):
-                server_writer.close()
 
 
 # ---------------------------------------------------------------------------
@@ -834,6 +743,7 @@ class D2Rig:
     store_path: str
     target_room_id: str
     homeserver_url: str
+    retired: bool = False
 
 
 def _make_matrix_config(
@@ -983,11 +893,28 @@ async def _stop_retry_worker(rig: D2Rig) -> None:
         rig.retry_worker = None
 
 
+@pytest.fixture
+async def d2_resources():
+    async with contextlib.AsyncExitStack() as resources:
+        yield resources
+
+
+async def _managed_rig(
+    resources: contextlib.AsyncExitStack, *args: Any, **kwargs: Any
+) -> D2Rig:
+    rig = await _start_rig(*args, **kwargs)
+    resources.push_async_callback(_stop_rig, rig)
+    return rig
+
+
 async def _stop_rig(rig: D2Rig) -> None:
     """Tear one rig down via the production stop paths.
 
     The nio store close must precede any store reopen by a restart phase.
     """
+    if rig.retired:
+        return
+    rig.retired = True
     # End ingress and dispatch before retiring the native adapter. Do not
     # force-close the SDK's database on a successful restart path: that would
     # mask a production ownership/close defect in the qualification evidence.
@@ -1047,15 +974,18 @@ async def _await_outbox_terminal(rig: D2Rig, event_id: str, status: str) -> Any:
 async def _await_outbox_status(rig: D2Rig, event_id: str, status: str) -> Any:
     """Wait until at least one outbox row of *event_id* reaches *status*."""
 
+    matched: Any = None
+
     async def _condition() -> bool:
+        nonlocal matched
         rows = await _outbox_rows(rig, event_id)
-        return any(row.status == status for row in rows)
+        matched = next((row for row in rows if row.status == status), None)
+        return matched is not None
 
     assert await wait_until(
         _condition, timeout=120.0, interval=0.25
     ), f"no outbox row for {event_id} reached {status}"
-    rows = await _outbox_rows(rig, event_id)
-    return [row for row in rows if row.status == status][0]
+    return matched
 
 
 async def _await_native_ref(rig: D2Rig, event_id: str) -> str:
@@ -1083,7 +1013,7 @@ async def _matrix_native_refs_async(rig: D2Rig, event_id: str) -> list[Any]:
 
 
 async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
-    d2_env: SynapseEnv, tmp_path: Path
+    d2_env: SynapseEnv, tmp_path: Path, d2_resources: contextlib.AsyncExitStack
 ) -> None:
     """Target 1: the routed outbound is encrypted, and an independently
     controlled recipient decrypts the intended content in the intended
@@ -1100,6 +1030,7 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
     peer_client = await _init_peer_client(
         env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
     )
+    d2_resources.push_async_callback(peer_client.close)
     rig: D2Rig | None = None
     verdict: dict[str, Any] = {
         "transport": "matrix",
@@ -1108,7 +1039,8 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
         "synapse": _synapse_image_digest(),
     }
     try:
-        rig = await _start_rig(
+        rig = await _managed_rig(
+            d2_resources,
             env,
             adapter_id="d2-matrix-target",
             store_path=rig_store,
@@ -1164,7 +1096,11 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
             for _event_id, content in list(seen.items()) + await _peer_timeline(
                 peer_client, room_id, 1
             ):
-                if content.get("body") == reply_body and "m.relates_to" in content:
+                if (
+                    _event_id == reply_native_id
+                    and content.get("body") == reply_body
+                    and "m.relates_to" in content
+                ):
                     reply_content = content
             if reply_content is not None:
                 break
@@ -1195,8 +1131,6 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
     finally:
         if rig is not None:
             await _stop_rig(rig)
-        with contextlib.suppress(Exception):
-            await peer_client.close()
     _write_verdict(tmp_path, "d2-scenario1-routed-outbound-verdict.json", verdict)
 
 
@@ -1205,8 +1139,11 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
 # ---------------------------------------------------------------------------
 
 
-async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities(
-    d2_env: SynapseEnv, tmp_path: Path
+async def test_d2_restart_preserves_device_and_checkpoint_identities(
+    d2_env: SynapseEnv,
+    tmp_path: Path,
+    d2_resources: contextlib.AsyncExitStack,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Target 2: restart the runtime/session on durable state and preserve
 
@@ -1219,10 +1156,8 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
     * the application checkpoint identity — the adapter commits its durable
       sync cursor through the host checkpoint contract (``nio_durable``
       stream) and the restarted session reloads it;
-    * the transaction identity — the deterministic send transaction ID derives
-      from canonical delivery identity alone, so it is identical across a
-      process restart (no fresh send identity merely because a process
-      restarted)."""
+    The transaction identity of retained work is qualified by the separate
+    interrupted-send scenario; this is an in-process session reopen."""
     env = d2_env
     rig_store = str(tmp_path / "rig-store")
     peer_store = str(tmp_path / "peer-store")
@@ -1233,12 +1168,14 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
     peer_client = await _init_peer_client(
         env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
     )
+    d2_resources.push_async_callback(peer_client.close)
     verdict: dict[str, Any] = {
         "transport": "matrix",
         "evidence_level": "docker_encrypted_room_qualification",
         "scenario": "restart_identity_preservation",
     }
-    rig = await _start_rig(
+    rig = await _managed_rig(
+        d2_resources,
         env,
         adapter_id="d2-restart-target",
         store_path=rig_store,
@@ -1286,21 +1223,21 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
         verdict["device_id_redacted"] = _redact(device_id)
         verdict["checkpoint_stream"] = "nio_durable"
 
-        # Transaction identity derives from canonical delivery identity; the
-        # same logical delivery must compute the same transaction ID across
-        # the restart boundary.
-        logical_result = RenderingResult(
-            event_id="d2-evt-txn-identity",
-            target_adapter="d2-restart-target",
-            target_channel=rig.target_room_id,
-            payload={"room_id": rig.target_room_id},
-        )
-        txn_before = _matrix_txn_id(logical_result, rig.target_room_id)
+        # Observe the restored flag before the new owner can accept a batch.
+        original_load = MatrixSession._load_classic_checkpoint
+        restored: list[bool] = []
+
+        async def observe_reload(session: MatrixSession) -> None:
+            await original_load(session)
+            restored.append(session.diagnostics().committed_checkpoint_present)
+
+        monkeypatch.setattr(MatrixSession, "_load_classic_checkpoint", observe_reload)
 
         # Restart through the production stop paths, then reopen the same
         # durable state.
         await _stop_rig(rig)
-        rig = await _start_rig(
+        rig = await _managed_rig(
+            d2_resources,
             env,
             adapter_id="d2-restart-target",
             store_path=rig_store,
@@ -1340,11 +1277,10 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
         assert (
             diagnostics.get("committed_checkpoint_present") is True
         ), "restarted session must report the committed checkpoint it reloaded"
-        txn_after = _matrix_txn_id(logical_result, rig.target_room_id)
         assert (
-            txn_after == txn_before
-        ), "deterministic transaction identity changed across restart"
-        verdict["transaction_id_stable"] = True
+            restored and restored[0]
+        ), "checkpoint evidence was not restored before sync"
+        verdict["restart_scope"] = "same_process_session_reopen"
         verdict["consumer_id_stable"] = True
         verdict["device_keys_stable"] = True
         verdict["checkpoint_reloaded"] = True
@@ -1362,8 +1298,6 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
         verdict["post_restart_delivery"] = "delivered_and_decrypted"
     finally:
         await _stop_rig(rig)
-        with contextlib.suppress(Exception):
-            await peer_client.close()
     _write_verdict(tmp_path, "d2-scenario2-restart-identity-verdict.json", verdict)
 
 
@@ -1373,12 +1307,15 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
 
 
 async def test_d2_interrupted_send_trichotomy(
-    d2_env: SynapseEnv, tmp_path: Path
+    d2_env: SynapseEnv,
+    tmp_path: Path,
+    d2_resources: contextlib.AsyncExitStack,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Target 3: distinguish accepted / proven-unsent / uncertain facts for
     interrupted sends, reuse accepted identity where supported, never infer
     nonacceptance from silence, and never authorize a fresh send merely
-    because a process restarted.
+    because a session restarted.
 
     Proven-unsent: the homeserver itself refuses the submission (M_FORBIDDEN,
     the room owner strips the bot's send permission). The pinned SDK refuses
@@ -1395,7 +1332,7 @@ async def test_d2_interrupted_send_trichotomy(
     client's viewpoint acceptance is UNKNOWN. Independent recipient
     observation then proves the homeserver actually accepted the send.
 
-    Accepted via identity reuse: after a process restart (same durable state)
+    Accepted via identity reuse: after an in-process session reopen (same durable state)
     the retry worker re-dispatches the retained uncertain row; the
     re-rendered delivery reuses the same deterministic transaction identity,
     the homeserver deduplicates it, and the recipient observes exactly one
@@ -1412,7 +1349,11 @@ async def test_d2_interrupted_send_trichotomy(
     peer_client = await _init_peer_client(
         env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
     )
-    proxy = SendResponseCutProxy("127.0.0.1", _PORT)
+    d2_resources.push_async_callback(peer_client.close)
+    port = urlsplit(env.base_url).port
+    assert port is not None
+    proxy = SendResponseCutProxy("127.0.0.1", port)
+    d2_resources.push_async_callback(proxy.close)
     proxy_port = await proxy.start()
     verdict: dict[str, Any] = {
         "transport": "matrix",
@@ -1428,6 +1369,18 @@ async def test_d2_interrupted_send_trichotomy(
             "server's own refusal response.",
         ],
     }
+
+    sends: list[tuple[str, str | None, Any]] = []
+    original_send = MatrixSession.room_send
+
+    async def observe_send(session, *args, **kwargs):
+        slot = len(sends)
+        sends.append((kwargs["room_id"], kwargs.get("tx_id"), None))
+        response = await original_send(session, *args, **kwargs)
+        sends[slot] = (kwargs["room_id"], kwargs.get("tx_id"), response)
+        return response
+
+    monkeypatch.setattr(MatrixSession, "room_send", observe_send)
 
     # Phase 1: proven-unsent via server-directed refusal (M_FORBIDDEN).
     # The harness joins the bot to the peer-owned plaintext room — the
@@ -1460,7 +1413,8 @@ async def test_d2_interrupted_send_trichotomy(
     # from index 0, so a second store on the interrupt rig's device would
     # conflict on the homeserver (400: one-time key already exists).
     refusal_login = _login(env.base_url, _BOT_LOCALPART, _BOT_PASSWORD)
-    refusal_rig = await _start_rig(
+    refusal_rig = await _managed_rig(
+        d2_resources,
         env,
         adapter_id="d2-refusal-target",
         store_path=str(tmp_path / "refusal-store"),
@@ -1489,16 +1443,16 @@ async def test_d2_interrupted_send_trichotomy(
             refusal_rig.storage,
             refusal_rig.runner,
             refusal_rig.adapter_id,
-            enabled=True,
+            enabled=False,
             initial_dispatch=True,
             interval_seconds=30.0,
         )
-        await recovery_worker.start()
         try:
+            await recovery_worker.start()
             await _await_outbox_terminal(refusal_rig, "d2-evt-refused", "dead_lettered")
         finally:
-            with contextlib.suppress(Exception):
-                await recovery_worker.stop()
+            await recovery_worker.stop()
+            assert not recovery_worker.has_retained_work
         rows = await _outbox_rows(refusal_rig, "d2-evt-refused")
         row = rows[0]
         matrix_refs = await _matrix_native_refs_async(refusal_rig, "d2-evt-refused")
@@ -1507,7 +1461,15 @@ async def test_d2_interrupted_send_trichotomy(
         assert (
             "permanent" in row_failure
         ), f"server refusal must be classified permanent, got {row_failure!r}"
+        assert any(
+            room == env.plain_room_id
+            and getattr(response, "status_code", None) == "M_FORBIDDEN"
+            and getattr(getattr(response, "transport_response", None), "status", None)
+            == 403
+            for room, _, response in sends
+        ), "no native M_FORBIDDEN response"
         verdict["phases"]["proven_unsent_server_refusal"] = {
+            "native_error": "M_FORBIDDEN",
             "outcome": "dead_lettered",
             "failure_kind": row_failure,
             "native_ref": None,
@@ -1515,10 +1477,9 @@ async def test_d2_interrupted_send_trichotomy(
     finally:
         await _stop_rig(refusal_rig)
 
-    # Phase 2: interrupted send — responses destroyed while armed. The retry
-    # worker performs exactly the initial dispatch (30s interval keeps any
-    # further claim out of the observation window).
-    rig = await _start_rig(
+    # Phase 2: initial dispatch only; no retries may race the observation.
+    rig = await _managed_rig(
+        d2_resources,
         env,
         adapter_id="d2-interrupt-target",
         store_path=rig_store,
@@ -1536,16 +1497,16 @@ async def test_d2_interrupted_send_trichotomy(
             rig.storage,
             rig.runner,
             rig.adapter_id,
-            enabled=True,
+            enabled=False,
             initial_dispatch=True,
             interval_seconds=30.0,
         )
-        await dispatch_worker.start()
         try:
+            await dispatch_worker.start()
             await _await_outbox_status(rig, "d2-evt-interrupted", "retry_wait")
         finally:
-            with contextlib.suppress(Exception):
-                await dispatch_worker.stop()
+            await dispatch_worker.stop()
+            assert not dispatch_worker.has_retained_work
         row = await _await_outbox_status(rig, "d2-evt-interrupted", "retry_wait")
         matrix_refs = await _matrix_native_refs_async(rig, "d2-evt-interrupted")
         assert (
@@ -1583,11 +1544,15 @@ async def test_d2_interrupted_send_trichotomy(
         await _stop_rig(rig)
 
     assert server_event_id is not None
+    interrupted_tx = {txn for room, txn, _ in sends if room == room_id}
+    assert len(interrupted_tx) == 1 and None not in interrupted_tx
+    sends.clear()
 
     # Phase 3: restart on the same durable state with the transport
     # restored; recovery re-dispatches the retained uncertain row.
     proxy.armed = False
-    rig = await _start_rig(
+    rig = await _managed_rig(
+        d2_resources,
         env,
         adapter_id="d2-interrupt-target",
         store_path=rig_store,
@@ -1607,12 +1572,12 @@ async def test_d2_interrupted_send_trichotomy(
             interval_seconds=0.5,
             max_attempts=30,
         )
-        await recovery_worker.start()
         try:
+            await recovery_worker.start()
             await _await_outbox_terminal(rig, "d2-evt-interrupted", "sent")
         finally:
-            with contextlib.suppress(Exception):
-                await recovery_worker.stop()
+            await recovery_worker.stop()
+            assert not recovery_worker.has_retained_work
         recovered_native = await _await_native_ref(rig, "d2-evt-interrupted")
 
         # The homeserver deduplicated the reused transaction identity: the
@@ -1621,37 +1586,32 @@ async def test_d2_interrupted_send_trichotomy(
             f"recovery must reuse the accepted identity: recovered "
             f"{recovered_native!r}, server accepted {server_event_id!r}"
         )
-        # Recipient observes exactly one copy of the interrupted body.
-        final_ids = await _peer_find_body(
-            peer_client, room_id, "d2 interrupted send body", attempts=8
-        )
-        assert final_ids == [server_event_id], (
-            f"recipient must observe exactly one copy of the interrupted "
-            f"send; observed {final_ids}"
-        )
+        # Successful recipient syncs after recovery, with distinct native IDs
+        # including undecryptable Megolm events from the fixture sender.
+        await _peer_timeline(peer_client, room_id, attempts=3)
+        final_ids = {
+            event_id
+            for event_id, sender in peer_client._d2_message_events.items()
+            if sender == env.bot_user_id
+        }
+        assert final_ids == {
+            server_event_id
+        }, "recipient observed additional sender message identities"
+        assert peer_client._d2_seen[server_event_id]["body"] == interrupted_body
+        recovered_tx = {txn for room, txn, _ in sends if room == room_id}
+        assert (
+            recovered_tx == interrupted_tx
+        ), "retained delivery changed transaction identity"
         verdict["phases"]["accepted_via_identity_reuse"] = {
             "outcome": "sent",
             "reused_server_event_id": True,
             "recipient_copies": 1,
         }
 
-        # The deterministic transaction identity for the recovered logical
-        # delivery is the identity the interrupted attempt used: neither the
-        # restart nor the retry minted a fresh send identity.
-        logical_result = RenderingResult(
-            event_id="d2-evt-interrupted",
-            target_adapter="d2-interrupt-target",
-            target_channel=room_id,
-            payload={"room_id": room_id},
-        )
-        assert _matrix_txn_id(logical_result, room_id).startswith("medre_")
-        verdict["transaction_identity"] = "deterministic_canonical_inputs"
+        verdict["transaction_identity"] = "observed_same_session_reopen_send_id"
+        verdict["restart_scope"] = "same_process_session_reopen"
     finally:
         await _stop_rig(rig)
-        with contextlib.suppress(Exception):
-            await proxy.close()
-        with contextlib.suppress(Exception):
-            await peer_client.close()
 
     assert set(verdict["phases"]) == {
         "proven_unsent_server_refusal",
@@ -1668,6 +1628,7 @@ async def test_d2_interrupted_send_trichotomy(
 
 async def test_d2_native_cooldown_and_operator_view(
     d2_rate_limit_env: SynapseEnv,
+    d2_resources: contextlib.AsyncExitStack,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1686,13 +1647,15 @@ async def test_d2_native_cooldown_and_operator_view(
     peer_client = await _init_peer_client(
         env, _RL_PEER_LOCALPART, _RL_PEER_PASSWORD, peer_store
     )
+    d2_resources.push_async_callback(peer_client.close)
     verdict: dict[str, Any] = {
         "transport": "matrix",
         "evidence_level": "docker_encrypted_room_qualification",
         "scenario": "native_server_directed_cooldown",
         "phases": {},
     }
-    rig = await _start_rig(
+    rig = await _managed_rig(
+        d2_resources,
         env,
         adapter_id="d2-cooldown-target",
         store_path=rig_store,
@@ -1701,12 +1664,22 @@ async def test_d2_native_cooldown_and_operator_view(
     try:
         await _await_bot_sees_peer_device(rig, env.peer_user_id)
 
+        native_limits: list[tuple[datetime, int]] = []
+        original_send = MatrixSession.room_send
+
+        async def observe_rate_limit(session, *args, **kwargs):
+            response = await original_send(session, *args, **kwargs)
+            if getattr(response, "status_code", None) == "M_LIMIT_EXCEEDED":
+                assert response.transport_response.status == 429
+                hint = response.retry_after_ms
+                assert isinstance(hint, int) and hint > 0
+                native_limits.append((datetime.now(UTC), hint))
+            return response
+
+        monkeypatch.setattr(MatrixSession, "room_send", observe_rate_limit)
         # First send: the bucket has its burst token; delivery succeeds.
         await _admit_message(rig, "d2-evt-rl-first", "d2 cooldown first message")
         await _await_outbox_terminal(rig, "d2-evt-rl-first", "sent")
-        seen = await _peer_find_body(peer_client, room_id, "d2 cooldown first message")
-        assert seen, "recipient never decrypted the first send"
-        verdict["phases"]["first_send"] = "delivered"
 
         # Second send immediately after: the homeserver's own message bucket
         # emits M_LIMIT_EXCEEDED with a retry_after hint.
@@ -1715,6 +1688,11 @@ async def test_d2_native_cooldown_and_operator_view(
         assert "transient" in (
             limited_row.failure_kind or ""
         ), f"server rate limit must be transient, got {limited_row.failure_kind!r}"
+        assert native_limits, "native rate-limit response was not observed"
+        observed_at, retry_ms = native_limits[0]
+        assert datetime.fromisoformat(
+            limited_row.next_attempt_at
+        ) >= observed_at + timedelta(milliseconds=retry_ms)
         diagnostics = rig.adapter.diagnostics()
         assert (
             diagnostics.get("outbound_rate_limit_events", 0) >= 1
@@ -1728,6 +1706,7 @@ async def test_d2_native_cooldown_and_operator_view(
             "failure_kind": limited_row.failure_kind,
             "cooldown_remaining_seconds": remaining,
             "next_attempt_at": limited_row.next_attempt_at,
+            "native_retry_after_ms": retry_ms,
         }
 
         # While the cooldown is active, a further delivery is deferred without
@@ -1753,6 +1732,10 @@ async def test_d2_native_cooldown_and_operator_view(
         assert rig.adapter.diagnostics().get("outbound_cooldown_deferrals", 0) >= 1
         verdict["phases"]["cooldown_gate"] = "deferred_without_wire"
 
+        seen = await _peer_find_body(peer_client, room_id, "d2 cooldown first message")
+        assert seen, "recipient never decrypted the first send"
+        verdict["phases"]["first_send"] = "delivered"
+
         # Cooldown expiry and durable recovery: the retained row recovers
         # through the retry worker once the server hint window passes.
         async def _cooldown_expired() -> bool:
@@ -1775,8 +1758,6 @@ async def test_d2_native_cooldown_and_operator_view(
         verdict["phases"]["cooldown_recovery"] = "delivered"
     finally:
         await _stop_rig(rig)
-        with contextlib.suppress(Exception):
-            await peer_client.close()
     _write_verdict(tmp_path, "d2-scenario4a-cooldown-verdict.json", verdict)
 
 
@@ -1796,7 +1777,10 @@ def _probe_result(event_id: str, target_adapter: str, room_id: str) -> Rendering
 
 
 async def test_d2_bounded_unavailable_server_and_operator_view(
-    d2_env: SynapseEnv, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    d2_env: SynapseEnv,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    d2_resources: contextlib.AsyncExitStack,
 ) -> None:
     """Target 4b: with the homeserver genuinely stopped, the send path is
     bounded (no unbounded hammering), the durable outbox reports the actual
@@ -1813,13 +1797,18 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
     peer_client = await _init_peer_client(
         env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
     )
+    d2_resources.push_async_callback(peer_client.close)
     verdict: dict[str, Any] = {
         "transport": "matrix",
         "evidence_level": "docker_encrypted_room_qualification",
         "scenario": "bounded_unavailable_server",
+        "limitations": [
+            "Session calls are counted; encryption preparation may fail before a room-send HTTP request."
+        ],
         "phases": {},
     }
-    rig = await _start_rig(
+    rig = await _managed_rig(
+        d2_resources,
         env,
         adapter_id="d2-unavailable-target",
         store_path=rig_store,
@@ -1835,16 +1824,16 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
             rig.storage,
             rig.runner,
             rig.adapter_id,
-            enabled=True,
+            enabled=False,
             initial_dispatch=True,
             interval_seconds=30.0,
         )
-        await baseline_worker.start()
         try:
+            await baseline_worker.start()
             await _await_outbox_terminal(rig, "d2-evt-up-baseline", "sent")
         finally:
-            with contextlib.suppress(Exception):
-                await baseline_worker.stop()
+            await baseline_worker.stop()
+            assert not baseline_worker.has_retained_work
         seen = await _peer_find_body(peer_client, room_id, "d2 unavailable baseline")
         assert seen, "recipient never decrypted the baseline send"
         verdict["phases"]["baseline"] = "delivered"
@@ -1855,11 +1844,13 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         await _admit_message(rig, "d2-evt-down", unavailable_body)
 
         room_send_calls = 0
+        transaction_ids: list[str | None] = []
         original_room_send = MatrixSession.room_send
 
         async def _counting_room_send(self: Any, *args: Any, **kwargs: Any) -> Any:
             nonlocal room_send_calls
             room_send_calls += 1
+            transaction_ids.append(kwargs.get("tx_id"))
             return await original_room_send(self, *args, **kwargs)
 
         monkeypatch.setattr(MatrixSession, "room_send", _counting_room_send)
@@ -1868,22 +1859,22 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
             rig.storage,
             rig.runner,
             rig.adapter_id,
-            enabled=True,
+            enabled=False,
             initial_dispatch=True,
             interval_seconds=30.0,
         )
-        await down_worker.start()
         try:
+            await down_worker.start()
             await _await_outbox_status(rig, "d2-evt-down", "retry_wait")
         finally:
-            with contextlib.suppress(Exception):
-                await down_worker.stop()
+            await down_worker.stop()
+            assert not down_worker.has_retained_work
         down_row = await _await_outbox_status(rig, "d2-evt-down", "retry_wait")
         # The in-adapter retry policy is bounded: exactly the configured
         # attempts for this pipeline attempt, then the failure is recorded.
         assert (
             0 < room_send_calls <= 3
-        ), f"unavailable-server wire attempts must be bounded, saw {room_send_calls}"
+        ), f"unavailable-server session calls must be bounded, saw {room_send_calls}"
         assert "transient" in (
             down_row.failure_kind or ""
         ), f"unavailable server must be transient, got {down_row.failure_kind!r}"
@@ -1895,13 +1886,20 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         ), "uncertain unavailable-server work must not claim acceptance"
         verdict["phases"]["unavailable_server"] = {
             "outcome": "retry_wait",
-            "wire_attempts": room_send_calls,
+            "session_room_send_calls": room_send_calls,
             "failure_kind": down_row.failure_kind,
             "native_ref": None,
         }
 
+        down_tx = set(transaction_ids)
+        assert len(down_tx) == 1 and None not in down_tx
+        transaction_ids.clear()
         # Server returns; the recovery owner re-dispatches the retained row.
         _docker("start", env.container, timeout=90)
+        assert (
+            "http://" + _docker("port", env.container, "8008/tcp", timeout=15).strip()
+            == env.base_url
+        )
         _wait_ready(env.base_url)
         recovery_worker = _start_retry_worker(
             rig.storage,
@@ -1912,12 +1910,15 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
             interval_seconds=0.5,
             max_attempts=30,
         )
-        await recovery_worker.start()
         try:
+            await recovery_worker.start()
             await _await_outbox_terminal(rig, "d2-evt-down", "sent")
         finally:
-            with contextlib.suppress(Exception):
-                await recovery_worker.stop()
+            await recovery_worker.stop()
+            assert not recovery_worker.has_retained_work
+        assert (
+            set(transaction_ids) == down_tx
+        ), "outage recovery changed transaction identity"
         recovered_native = await _await_native_ref(rig, "d2-evt-down")
         recovered_seen = await _peer_find_body(
             peer_client, room_id, unavailable_body, attempts=10
@@ -1933,6 +1934,4 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         with contextlib.suppress(subprocess.SubprocessError, OSError):
             _docker("start", env.container, timeout=90)
         await _stop_rig(rig)
-        with contextlib.suppress(Exception):
-            await peer_client.close()
     _write_verdict(tmp_path, "d2-scenario4b-unavailable-verdict.json", verdict)
