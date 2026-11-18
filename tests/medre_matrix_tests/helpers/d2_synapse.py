@@ -151,27 +151,6 @@ class SynapseEnv:
     plain_room_id: str
 
 
-def _clear_root_owned(data_dir: Path) -> None:
-    """Clear a root-owned Synapse data directory using a throwaway container."""
-    docker(
-        "run",
-        "--rm",
-        "--user",
-        "root",
-        "--entrypoint",
-        "",
-        "-v",
-        f"{data_dir}:/data",
-        _SYNAPSE_IMAGE,
-        "find",
-        "/data",
-        "-mindepth",
-        "1",
-        "-delete",
-        timeout=90,
-    )
-
-
 def _boot_synapse(
     container: str,
     *,
@@ -186,14 +165,21 @@ def _boot_synapse(
     parent = Path(tempfile.mkdtemp(prefix="medre-d2-"))
     data_dir = parent / "synapse"
     data_dir.mkdir(mode=0o700)
-    # Own all resources before running the first potentially failing command.
+    # The host identity owns the data directory before the first container
+    # starts, so config generation and the homeserver itself run unprivileged
+    # and no root-mode ownership step inside Docker is ever needed. The
+    # mkdtemp parent already keeps every generated file private.
     uid = os.getuid() or 991
     gid = os.getgid() if os.getuid() else 991
     identity = f"{uid}:{gid}"
+    if not os.getuid():
+        os.chown(data_dir, uid, gid)
     try:
         docker(
             "run",
             "--rm",
+            "--user",
+            identity,
             "-e",
             f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
             "-e",
@@ -203,39 +189,6 @@ def _boot_synapse(
             _SYNAPSE_IMAGE,
             "generate",
             timeout=180,
-        )
-        docker(
-            "run",
-            "--rm",
-            "--user",
-            "root",
-            "--entrypoint",
-            "",
-            "-v",
-            f"{data_dir}:/data",
-            _SYNAPSE_IMAGE,
-            "chown",
-            "-R",
-            identity,
-            "/data",
-            timeout=90,
-        )
-
-        docker(
-            "run",
-            "--rm",
-            "--user",
-            "root",
-            "--entrypoint",
-            "",
-            "-v",
-            f"{data_dir}:/data",
-            _SYNAPSE_IMAGE,
-            "chmod",
-            "-R",
-            "u=rwX,go=",
-            "/data",
-            timeout=90,
         )
 
         homeserver_yaml = data_dir / "homeserver.yaml"
@@ -353,11 +306,7 @@ def _boot_synapse(
     finally:
         with contextlib.suppress(subprocess.SubprocessError, OSError):
             docker("rm", "-f", container, timeout=90)
-        try:
-            shutil.rmtree(data_dir)
-        except PermissionError:
-            _clear_root_owned(data_dir)
-            shutil.rmtree(data_dir)
+        shutil.rmtree(data_dir)
         parent.rmdir()
 
 
