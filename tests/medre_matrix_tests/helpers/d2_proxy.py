@@ -35,7 +35,7 @@ def _forward_headers(headers: Any) -> list[tuple[str, str]]:
 
 
 class SendResponseCutProxy:
-    """Forward complete HTTP messages, cut only a successful room-send response.
+    """Forward HTTP messages and optionally cut successful room-send responses.
 
     aiohttp owns framing, keep-alive retirement and chunk decoding. The
     upstream response is read before aborting the client transport: the
@@ -44,12 +44,17 @@ class SendResponseCutProxy:
     """
 
     def __init__(self, target_host: str, target_port: int) -> None:
-        self._target = f"http://{target_host}:{target_port}"
+        self.set_upstream(target_host, target_port)
         self._runner: Any = None
         self._client: Any = None
         self.armed = True
         self.cuts = 0
+        self.room_send_requests = 0
         self.port: int | None = None
+
+    def set_upstream(self, host: str, port: int) -> None:
+        """Retarget a restarted container while keeping the client origin."""
+        self._target = f"http://{host}:{port}"
 
     async def start(self) -> int:
         import aiohttp
@@ -64,30 +69,35 @@ class SendResponseCutProxy:
         async def forward(request: Any) -> Any:
             body = await request.read()
             url = URL(self._target + request.raw_path, encoded=True)
-            async with client.request(
-                request.method,
-                url,
-                data=body,
-                headers=_forward_headers(request.headers),
-                allow_redirects=False,
-            ) as upstream:
-                response = await upstream.read()
-                if (
-                    self.armed
-                    and request.method in {"PUT", "POST"}
-                    and "/send/m.room." in request.path
-                    and 200 <= upstream.status < 300
-                ):
-                    self.cuts += 1
-                    transport = request.transport
-                    if transport is not None:
-                        transport.abort()
-                    return web.Response(status=502)
-                return web.Response(
-                    status=upstream.status,
-                    body=response,
-                    headers=_forward_headers(upstream.headers),
-                )
+            room_send = (
+                request.method in {"PUT", "POST"} and "/send/m.room." in request.path
+            )
+            if room_send:
+                self.room_send_requests += 1
+            try:
+                async with client.request(
+                    request.method,
+                    url,
+                    data=body,
+                    headers=_forward_headers(request.headers),
+                    allow_redirects=False,
+                ) as upstream:
+                    response = await upstream.read()
+                    if self.armed and room_send and 200 <= upstream.status < 300:
+                        self.cuts += 1
+                    else:
+                        return web.Response(
+                            status=upstream.status,
+                            body=response,
+                            headers=_forward_headers(upstream.headers),
+                        )
+            except aiohttp.ClientConnectionError:
+                # Preserve a network failure while the upstream is offline.
+                # A synthesized HTTP reply would exercise a different path.
+                pass
+            if request.transport is not None:
+                request.transport.abort()
+            return web.Response(status=502)
 
         app = web.Application(handler_args={"auto_decompress": False})
         app.router.add_route("*", "/{path:.*}", forward)

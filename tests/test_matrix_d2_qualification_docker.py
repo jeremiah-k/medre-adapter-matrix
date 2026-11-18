@@ -42,19 +42,12 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
-import shutil
-import subprocess
-import tempfile
-import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
 from typing import Any
-from uuid import uuid4
+from urllib.parse import urlsplit
 
 import pytest
 from medre.config.model import RetryConfig
@@ -77,9 +70,29 @@ from medre.core.supervision.accounting import RuntimeAccounting
 from medre.runtime.retry import RetryWorker
 from medre_matrix_tests.helpers.async_utils import wait_until
 from medre_matrix_tests.helpers.d2_proxy import SendResponseCutProxy
+from medre_matrix_tests.helpers.d2_synapse import (
+    BOT_LOCALPART,
+    BOT_PASSWORD,
+    PEER_LOCALPART,
+    PEER_PASSWORD,
+    RL_PEER_LOCALPART,
+    RL_PEER_PASSWORD,
+    SynapseEnv,
+)
+from medre_matrix_tests.helpers.d2_synapse import d2_env as d2_env
+from medre_matrix_tests.helpers.d2_synapse import d2_rate_limit_env as d2_rate_limit_env
+from medre_matrix_tests.helpers.d2_synapse import (
+    docker,
+    http_json,
+    init_peer_client,
+    login,
+    peer_find_body,
+    peer_timeline,
+    synapse_image_digest,
+    wait_ready,
+)
 
 from medre.adapters.matrix.adapter import MatrixAdapter
-from medre.adapters.matrix.compat import HAS_E2EE
 from medre.adapters.matrix.durable_sync import (
     _durable_database_name,
     _existing_consumer_id,
@@ -91,390 +104,8 @@ from medre.config.adapters.matrix import MatrixConfig
 
 pytestmark = pytest.mark.docker
 
-logger = logging.getLogger("medre.matrix.d2")
-
-_SYNAPSE_IMAGE = "matrixdotorg/synapse:v1.164.2"
-_SERVER_NAME = "medre-d2.local"
-_CONTAINER = "medre-d2-synapse"
-_RL_CONTAINER = "medre-d2-ratelimit-synapse"
-_READY_TIMEOUT = 180
-
-_BOT_LOCALPART = "d2-bot"
-_BOT_PASSWORD = "d2-bot-password"
-_PEER_LOCALPART = "d2-peer"
-_PEER_PASSWORD = "d2-peer-password"
-_RL_BOT_LOCALPART = "d2rl-bot"
-_RL_BOT_PASSWORD = "d2rl-bot-password"
-_RL_PEER_LOCALPART = "d2rl-peer"
-_RL_PEER_PASSWORD = "d2rl-peer-password"
-
 _SOURCE_ADAPTER = "d2-source"
 _SOURCE_CHANNEL = "ch-0"
-
-
-# ---------------------------------------------------------------------------
-# Docker bootstrap (same shape as the device-trust qualification harness)
-# ---------------------------------------------------------------------------
-
-
-def _docker(*args: str, timeout: int = 120) -> str:
-    result = subprocess.run(
-        ["docker", *args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=True,
-    )
-    return result.stdout
-
-
-def _docker_available() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    try:
-        _docker("info", "--format", "{{.ServerVersion}}", timeout=15)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return True
-
-
-def _synapse_image_digest() -> str:
-    with contextlib.suppress(subprocess.SubprocessError, OSError, IndexError):
-        return _docker(
-            "image",
-            "inspect",
-            "--format",
-            "{{index .RepoDigests 0}}",
-            _SYNAPSE_IMAGE,
-            timeout=15,
-        ).strip()
-    return "<unavailable>"
-
-
-def _http_json(
-    url: str,
-    payload: dict[str, Any] | None = None,
-    *,
-    token: str | None = None,
-    method: str = "GET",
-    timeout: int = 20,
-) -> dict[str, Any]:
-    headers = {"Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    # The rate-limit scenario's homeserver throttles the boot's own room
-    # setup; retry a bounded number of times on the server's retry-after
-    # hint instead of treating the scenario's own limit as boot failure.
-    for attempt in range(5):
-        try:
-            # URL schemes come from the harness's own localhost fixture.
-            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode()
-            exc.close()
-            if exc.code != 429 or attempt == 4:
-                raise RuntimeError(
-                    f"HTTP {exc.code} for {method} {url}: {body}"
-                ) from exc
-            delay = 0.5
-            try:
-                hinted = json.loads(body).get("retry_after_ms")
-                if hinted is not None:
-                    delay = float(hinted) / 1000.0
-            except (ValueError, TypeError):
-                pass
-            time.sleep(max(0.05, min(delay, 5.0)))
-    raise RuntimeError(f"unreachable: retries exhausted for {method} {url}")
-
-
-def _wait_ready(base_url: str, timeout: int = _READY_TIMEOUT) -> None:
-    """Bounded readiness wait on the versions endpoint (service bootstrap)."""
-    monotonic_deadline = time.monotonic() + timeout
-    while time.monotonic() < monotonic_deadline:
-        try:
-            _http_json(f"{base_url}/_matrix/client/versions", timeout=3)
-            return
-        except (RuntimeError, OSError):
-            time.sleep(1.0)
-    raise RuntimeError(f"Synapse did not become ready within {timeout}s")
-
-
-def _login(base_url: str, localpart: str, password: str) -> dict[str, Any]:
-    return _http_json(
-        f"{base_url}/_matrix/client/v3/login",
-        {"type": "m.login.password", "user": localpart, "password": password},
-        method="POST",
-    )
-
-
-@dataclass
-class SynapseEnv:
-    """Connection details for one running qualification homeserver."""
-
-    base_url: str
-    container: str
-    bot_user_id: str
-    bot_access_token: str
-    bot_device_id: str
-    peer_user_id: str
-    peer_access_token: str
-    peer_device_id: str
-    encrypted_room_id: str
-    plain_room_id: str
-
-
-def _clear_root_owned(data_dir: Path) -> None:
-    """Clear a root-owned Synapse data directory using a throwaway container."""
-    _docker(
-        "run",
-        "--rm",
-        "--user",
-        "root",
-        "--entrypoint",
-        "",
-        "-v",
-        f"{data_dir}:/data",
-        _SYNAPSE_IMAGE,
-        "find",
-        "/data",
-        "-mindepth",
-        "1",
-        "-delete",
-        timeout=90,
-    )
-
-
-def _boot_synapse(
-    container: str,
-    *,
-    bot_localpart: str,
-    bot_password: str,
-    peer_localpart: str,
-    peer_password: str,
-    rc_message: dict[str, float] | None,
-) -> Any:
-    """Boot one Synapse container, two users and the scenario rooms."""
-    container = f"{container}-{uuid4().hex[:12]}"
-    parent = Path(tempfile.mkdtemp(prefix="medre-d2-"))
-    data_dir = parent / "synapse"
-    data_dir.mkdir(mode=0o700)
-    # Own all resources before running the first potentially failing command.
-    uid = os.getuid() or 991
-    gid = os.getgid() if os.getuid() else 991
-    identity = f"{uid}:{gid}"
-    try:
-        _docker(
-            "run",
-            "--rm",
-            "-e",
-            f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
-            "-e",
-            "SYNAPSE_REPORT_STATS=no",
-            "-v",
-            f"{data_dir}:/data",
-            _SYNAPSE_IMAGE,
-            "generate",
-            timeout=180,
-        )
-        _docker(
-            "run",
-            "--rm",
-            "--user",
-            "root",
-            "--entrypoint",
-            "",
-            "-v",
-            f"{data_dir}:/data",
-            _SYNAPSE_IMAGE,
-            "chown",
-            "-R",
-            identity,
-            "/data",
-            timeout=90,
-        )
-
-        _docker(
-            "run",
-            "--rm",
-            "--user",
-            "root",
-            "--entrypoint",
-            "",
-            "-v",
-            f"{data_dir}:/data",
-            _SYNAPSE_IMAGE,
-            "chmod",
-            "-R",
-            "u=rwX,go=",
-            "/data",
-            timeout=90,
-        )
-
-        homeserver_yaml = data_dir / "homeserver.yaml"
-        with open(homeserver_yaml, "a", encoding="utf-8") as fh:
-            fh.write("\n# medre d2 qualification overrides\n")
-            fh.write("enable_registration: true\n")
-            fh.write("enable_registration_without_verification: true\n")
-            fh.write("rc_login:\n")
-            fh.write("  account:\n    per_second: 5\n    burst_count: 100\n")
-            fh.write("  address:\n    per_second: 5\n    burst_count: 100\n")
-            if rc_message is not None:
-                # Server-directed rate-limit scenario: a deliberately tiny,
-                # slow-refilling message bucket makes the homeserver itself emit
-                # M_LIMIT_EXCEEDED for the send that follows the first within the
-                # refill window, regardless of observation timing in between.
-                fh.write("rc_message:\n")
-                fh.write(f"  per_second: {rc_message['per_second']}\n")
-                fh.write(f"  burst_count: {rc_message['burst_count']}\n")
-
-        _docker(
-            "run",
-            "-d",
-            "--name",
-            container,
-            "--user",
-            identity,
-            "-e",
-            f"SYNAPSE_SERVER_NAME={_SERVER_NAME}",
-            "-e",
-            "SYNAPSE_REPORT_STATS=no",
-            "-p",
-            "127.0.0.1::8008",
-            "-v",
-            f"{data_dir}:/data",
-            _SYNAPSE_IMAGE,
-            timeout=180,
-        )
-        base_url = (
-            "http://" + _docker("port", container, "8008/tcp", timeout=15).strip()
-        )
-        assert urlsplit(base_url).hostname == "127.0.0.1"
-        _wait_ready(base_url)
-
-        for localpart, password in (
-            (bot_localpart, bot_password),
-            (peer_localpart, peer_password),
-        ):
-            _docker(
-                "exec",
-                container,
-                "register_new_matrix_user",
-                "-u",
-                localpart,
-                "-p",
-                password,
-                "--no-admin",
-                "-c",
-                "/data/homeserver.yaml",
-                "http://localhost:8008",
-                timeout=90,
-            )
-
-        bot_login = _login(base_url, bot_localpart, bot_password)
-        peer_login = _login(base_url, peer_localpart, peer_password)
-
-        encrypted_room = _http_json(
-            f"{base_url}/_matrix/client/v3/createRoom",
-            {"name": "MEDRE D2 encrypted", "preset": "public_chat"},
-            token=bot_login["access_token"],
-            method="POST",
-        )
-        encrypted_room_id = encrypted_room["room_id"]
-        _http_json(
-            f"{base_url}/_matrix/client/v3/join/{encrypted_room_id}",
-            {},
-            token=peer_login["access_token"],
-            method="POST",
-        )
-        _http_json(
-            f"{base_url}/_matrix/client/v3/rooms/{encrypted_room_id}"
-            "/state/m.room.encryption",
-            {"algorithm": "m.megolm.v1.aes-sha2"},
-            token=bot_login["access_token"],
-            method="PUT",
-        )
-
-        # Peer-owned plaintext room for the server-directed refusal scenario;
-        # the bot's membership and send-permission setup lives in that
-        # scenario, never in this shared boot helper.
-        plain_room = _http_json(
-            f"{base_url}/_matrix/client/v3/createRoom",
-            {"name": "MEDRE D2 peer-only", "preset": "public_chat"},
-            token=peer_login["access_token"],
-            method="POST",
-        )
-
-        env = SynapseEnv(
-            base_url=base_url,
-            container=container,
-            bot_user_id=bot_login["user_id"],
-            bot_access_token=bot_login["access_token"],
-            bot_device_id=bot_login.get("device_id", ""),
-            peer_user_id=peer_login["user_id"],
-            peer_access_token=peer_login["access_token"],
-            peer_device_id=peer_login.get("device_id", ""),
-            encrypted_room_id=encrypted_room_id,
-            plain_room_id=plain_room["room_id"],
-        )
-        logger.info(
-            "D2 Synapse ready: container=%s bot=%s peer=%s room=%s",
-            container,
-            env.bot_user_id,
-            env.peer_user_id,
-            env.encrypted_room_id,
-        )
-        yield env
-    finally:
-        with contextlib.suppress(subprocess.SubprocessError, OSError):
-            _docker("rm", "-f", container, timeout=90)
-        try:
-            shutil.rmtree(data_dir)
-        except PermissionError:
-            _clear_root_owned(data_dir)
-            shutil.rmtree(data_dir)
-        parent.rmdir()
-
-
-@pytest.fixture
-def d2_env() -> Any:
-    """Main qualification homeserver with ordinary rate limits."""
-    if not _docker_available():
-        pytest.skip("Docker is not available")
-    if not HAS_E2EE:
-        pytest.skip("mindroom-nio[e2e] is required for the D2 encrypted qualification")
-    yield from _boot_synapse(
-        _CONTAINER,
-        bot_localpart=_BOT_LOCALPART,
-        bot_password=_BOT_PASSWORD,
-        peer_localpart=_PEER_LOCALPART,
-        peer_password=_PEER_PASSWORD,
-        rc_message=None,
-    )
-
-
-@pytest.fixture
-def d2_rate_limit_env() -> Any:
-    """Homeserver whose message bucket emits genuine M_LIMIT_EXCEEDED."""
-    if not _docker_available():
-        pytest.skip("Docker is not available")
-    if not HAS_E2EE:
-        pytest.skip("mindroom-nio[e2e] is required for the D2 encrypted qualification")
-    yield from _boot_synapse(
-        _RL_CONTAINER,
-        bot_localpart=_RL_BOT_LOCALPART,
-        bot_password=_RL_BOT_PASSWORD,
-        peer_localpart=_RL_PEER_LOCALPART,
-        peer_password=_RL_PEER_PASSWORD,
-        rc_message={"per_second": 0.05, "burst_count": 1},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Recipient client (independently controlled) and observation helpers
-# ---------------------------------------------------------------------------
 
 
 def _redact(value: str | None) -> str:
@@ -483,121 +114,6 @@ def _redact(value: str | None) -> str:
     if len(value) <= 4:
         return "****"
     return value[:2] + "****" + value[-2:]
-
-
-async def _init_peer_client(
-    env: SynapseEnv, localpart: str, password: str, store_path: str
-) -> Any:
-    """Create the recipient nio client with genuine Megolm crypto enabled."""
-    import nio
-
-    peer_login = _login(env.base_url, localpart, password)
-    client = nio.AsyncClient(
-        homeserver=env.base_url,
-        user=peer_login["user_id"],
-        device_id=peer_login["device_id"],
-        store_path=store_path,
-        config=nio.AsyncClientConfig(
-            encryption_enabled=True,
-            max_timeouts=0,
-            max_limit_exceeded=0,
-            request_timeout=10,
-        ),
-    )
-    try:
-        client.restore_login(
-            user_id=peer_login["user_id"],
-            device_id=peer_login["device_id"],
-            access_token=peer_login["access_token"],
-        )
-        initial = await asyncio.wait_for(client.sync(full_state=True), 20)
-        assert isinstance(initial, nio.SyncResponse), "recipient initial sync failed"
-        if client.should_upload_keys:
-            await client.keys_upload()
-        if client.should_query_keys:
-            await client.keys_query()
-        if client.should_claim_keys:
-            with contextlib.suppress(Exception):
-                users = client.get_users_for_key_claiming()
-                if users:
-                    await client.keys_claim(users)
-        await client.send_to_device_messages()
-    except BaseException:
-        await client.close()
-        raise
-    return client
-
-
-async def _peer_timeline(
-    peer_client: Any, room_id: str, attempts: int = 6
-) -> list[tuple[str, dict[str, Any]]]:
-    """Sync the recipient and return decrypted (event_id, content) pairs.
-
-    RoomMessageText also represents plaintext. Only the pinned SDK's
-    explicit decrypted flag qualifies receipt of encrypted content. Track
-    other sender message IDs separately to expose undecryptable duplicates.
-
-    Syncs are incremental: every decrypted event is appended to a cumulative
-    ``_d2_seen`` store on the client, because an event that arrives while an
-    earlier search is polling will never reappear in a later sync window.
-    """
-    seen: dict[str, dict[str, Any]] = getattr(peer_client, "_d2_seen", None) or {}
-    peer_client._d2_seen = seen
-    collected: list[tuple[str, dict[str, Any]]] = []
-    for _ in range(attempts):
-        response = await asyncio.wait_for(peer_client.sync(timeout=3000), 15)
-        if getattr(response, "next_batch", None) is None:
-            raise AssertionError("recipient sync failed; no observation made")
-        join = getattr(getattr(response, "rooms", None), "join", None) or {}
-        info = join.get(room_id)
-        timeline = getattr(info, "timeline", None) if info is not None else None
-        if getattr(timeline, "limited", False):
-            raise AssertionError(
-                "recipient timeline is limited; observation is incomplete"
-            )
-        for event in getattr(timeline, "events", None) or []:
-            sender = getattr(event, "sender", None)
-            event_id = getattr(event, "event_id", "")
-            if (
-                event_id
-                and sender
-                and (
-                    type(event).__name__ in {"RoomMessageText", "MegolmEvent"}
-                    or getattr(event, "decrypted", False)
-                )
-            ):
-                observed = getattr(peer_client, "_d2_message_events", {})
-                observed[event_id] = sender
-                peer_client._d2_message_events = observed
-            if (
-                type(event).__name__ == "RoomMessageText"
-                and getattr(event, "decrypted", False) is True
-            ):
-                source = getattr(event, "source", None) or {}
-                content = source.get("content") if isinstance(source, dict) else None
-                if not isinstance(content, dict):
-                    content = {"body": getattr(event, "body", "")}
-                event_id = getattr(event, "event_id", "")
-                collected.append((event_id, content))
-                seen[event_id] = content
-    return collected
-
-
-async def _peer_find_body(
-    peer_client: Any, room_id: str, body: str, attempts: int = 8
-) -> list[str]:
-    """Recipient-side observation: native event IDs whose decrypted body matches."""
-    for _ in range(attempts):
-        await _peer_timeline(peer_client, room_id, 1)
-        seen = peer_client._d2_seen
-        matches = [
-            event_id
-            for event_id, content in seen.items()
-            if content.get("body") == body
-        ]
-        if matches:
-            return matches
-    return []
 
 
 async def _await_bot_sees_peer_device(
@@ -622,36 +138,6 @@ async def _await_bot_sees_peer_device(
     assert await wait_until(
         _peer_known, timeout=60.0, interval=0.5
     ), "bot device store never learned the peer device keys"
-
-
-async def _await_olm_session_with_peer(rig: D2Rig, peer_user_id: str) -> None:
-    """Wait until the bot holds an established Olm session with the peer device.
-
-    The pinned SDK forks a fresh Megolm outbound session on every room send
-    and silently skips key shares to devices without an Olm session, which
-    would make the send undecryptable for the recipient. Establishing the
-    Olm session first is a readiness gate, not a behavior change.
-    """
-
-    def _olm_ready() -> bool:
-        session = rig.adapter._session
-        client = getattr(session, "_client", None)
-        device_store = getattr(client, "device_store", None)
-        session_store = getattr(getattr(client, "olm", None), "session_store", None)
-        if device_store is None or session_store is None:
-            return False
-        try:
-            for device in device_store.active_user_devices(peer_user_id):
-                key = getattr(device, "curve25519", None)
-                if key and list(session_store.get(key)):
-                    return True
-        except Exception:
-            return False
-        return False
-
-    assert await wait_until(
-        _olm_ready, timeout=90.0, interval=0.5
-    ), "bot never established an Olm session with the peer device"
 
 
 def _write_verdict(tmp_path: Path, name: str, verdict: dict[str, Any]) -> None:
@@ -740,15 +226,10 @@ class D2Rig:
 
     adapter: MatrixAdapter
     runner: PipelineRunner
-    worker: DurableIngressWorker
-    retry_worker: RetryWorker | None
     storage: SQLiteStorage
-    db_path: str
     adapter_id: str
-    store_path: str
     target_room_id: str
-    homeserver_url: str
-    retired: bool = False
+    resources: contextlib.AsyncExitStack
 
 
 def _make_matrix_config(
@@ -869,37 +350,30 @@ async def _start_rig(
         resources.push_async_callback(runner.stop)
         await runner.start()
         resources.push_async_callback(adapter.stop)
+        if retry_worker is not None:
+            resources.push_async_callback(_stop_retry_worker, retry_worker)
         resources.push_async_callback(worker.stop, grace_seconds=5.0)
         await worker.start()
         await adapter.start(_make_ctx(adapter_id, runner, storage))
         if retry_worker is not None:
-            resources.push_async_callback(retry_worker.stop)
             await retry_worker.start()
-        rig = D2Rig(
+        return D2Rig(
             adapter=adapter,
             runner=runner,
-            worker=worker,
-            retry_worker=retry_worker,
             storage=storage,
-            db_path=db_path,
             adapter_id=adapter_id,
-            store_path=store_path,
             target_room_id=room_id,
-            homeserver_url=homeserver or env.base_url,
+            resources=resources.pop_all(),
         )
-        resources.pop_all()
-        return rig
 
 
-async def _stop_retry_worker(rig: D2Rig) -> None:
-    if rig.retry_worker is not None:
-        await rig.retry_worker.stop()
-        assert not rig.retry_worker.has_retained_work
-        rig.retry_worker = None
+async def _stop_retry_worker(worker: RetryWorker) -> None:
+    await worker.stop()
+    assert not worker.has_retained_work
 
 
 @pytest.fixture
-async def d2_resources():
+async def d2_resources() -> AsyncIterator[contextlib.AsyncExitStack]:
     async with contextlib.AsyncExitStack() as resources:
         yield resources
 
@@ -917,18 +391,10 @@ async def _stop_rig(rig: D2Rig) -> None:
 
     The nio store close must precede any store reopen by a restart phase.
     """
-    if rig.retired:
-        return
-    rig.retired = True
     # End ingress and dispatch before retiring the native adapter. Do not
     # force-close the SDK's database on a successful restart path: that would
     # mask a production ownership/close defect in the qualification evidence.
-    async with contextlib.AsyncExitStack() as resources:
-        resources.push_async_callback(rig.storage.close)
-        resources.push_async_callback(rig.runner.stop)
-        resources.push_async_callback(rig.adapter.stop)
-        resources.push_async_callback(_stop_retry_worker, rig)
-        resources.push_async_callback(rig.worker.stop, grace_seconds=5.0)
+    await rig.resources.aclose()
 
 
 async def _admit_message(
@@ -1032,16 +498,14 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
     for store_dir in (rig_store, peer_store):
         Path(store_dir).mkdir(parents=True, exist_ok=True)
 
-    peer_client = await _init_peer_client(
-        env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
-    )
+    peer_client = await init_peer_client(env, PEER_LOCALPART, PEER_PASSWORD, peer_store)
     d2_resources.push_async_callback(peer_client.close)
     rig: D2Rig | None = None
     verdict: dict[str, Any] = {
         "transport": "matrix",
         "evidence_level": "docker_encrypted_room_qualification",
         "scenario": "routed_outbound_recipient_decryption",
-        "synapse": _synapse_image_digest(),
+        "synapse": synapse_image_digest(),
     }
     try:
         rig = await _managed_rig(
@@ -1083,7 +547,7 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
         reply_native_id = await _await_native_ref(rig, "d2-evt-reply")
 
         # Recipient-side decryption and scope verification.
-        parent_seen = await _peer_find_body(peer_client, room_id, parent_body)
+        parent_seen = await peer_find_body(peer_client, room_id, parent_body)
         assert parent_seen, "recipient never decrypted the routed parent message"
         assert parent_native_id in parent_seen, (
             "recipient-observed parent event ID must equal the homeserver-"
@@ -1091,14 +555,14 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
             f"{parent_native_id}"
         )
 
-        reply_seen = await _peer_find_body(peer_client, room_id, reply_body)
+        reply_seen = await peer_find_body(peer_client, room_id, reply_body)
         assert reply_seen, "recipient never decrypted the routed reply message"
         assert reply_native_id in reply_seen
 
         reply_content = None
         for _ in range(8):
             seen: dict = getattr(peer_client, "_d2_seen", None) or {}
-            for _event_id, content in list(seen.items()) + await _peer_timeline(
+            for _event_id, content in list(seen.items()) + await peer_timeline(
                 peer_client, room_id, 1
             ):
                 if (
@@ -1170,9 +634,7 @@ async def test_d2_restart_preserves_device_and_checkpoint_identities(
     for store_dir in (rig_store, peer_store):
         Path(store_dir).mkdir(parents=True, exist_ok=True)
 
-    peer_client = await _init_peer_client(
-        env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
-    )
+    peer_client = await init_peer_client(env, PEER_LOCALPART, PEER_PASSWORD, peer_store)
     d2_resources.push_async_callback(peer_client.close)
     verdict: dict[str, Any] = {
         "transport": "matrix",
@@ -1193,7 +655,7 @@ async def test_d2_restart_preserves_device_and_checkpoint_identities(
         await _admit_message(rig, "d2-evt-pre-restart", "d2 pre-restart body")
         await _await_outbox_terminal(rig, "d2-evt-pre-restart", "sent")
         pre_native = await _await_native_ref(rig, "d2-evt-pre-restart")
-        seen_pre = await _peer_find_body(
+        seen_pre = await peer_find_body(
             peer_client, rig.target_room_id, "d2 pre-restart body"
         )
         assert (
@@ -1296,7 +758,7 @@ async def test_d2_restart_preserves_device_and_checkpoint_identities(
         await _admit_message(rig, "d2-evt-post-restart", post_body)
         await _await_outbox_terminal(rig, "d2-evt-post-restart", "sent")
         post_native = await _await_native_ref(rig, "d2-evt-post-restart")
-        seen_post = await _peer_find_body(peer_client, rig.target_room_id, post_body)
+        seen_post = await peer_find_body(peer_client, rig.target_room_id, post_body)
         assert (
             seen_post and post_native in seen_post
         ), "recipient never decrypted the post-restart delivery"
@@ -1351,9 +813,7 @@ async def test_d2_interrupted_send_trichotomy(
     for store_dir in (rig_store, peer_store):
         Path(store_dir).mkdir(parents=True, exist_ok=True)
 
-    peer_client = await _init_peer_client(
-        env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
-    )
+    peer_client = await init_peer_client(env, PEER_LOCALPART, PEER_PASSWORD, peer_store)
     d2_resources.push_async_callback(peer_client.close)
     port = urlsplit(env.base_url).port
     assert port is not None
@@ -1393,13 +853,13 @@ async def test_d2_interrupted_send_trichotomy(
     # own — then the peer owner strips the bot's send permission with a
     # raised events_default, so the submission reaches Synapse and is
     # refused there.
-    _http_json(
+    http_json(
         f"{env.base_url}/_matrix/client/v3/join/{env.plain_room_id}",
         {},
         token=env.bot_access_token,
         method="POST",
     )
-    _http_json(
+    http_json(
         f"{env.base_url}/_matrix/client/v3/rooms/{env.plain_room_id}"
         "/state/m.room.power_levels",
         {
@@ -1417,7 +877,7 @@ async def test_d2_interrupted_send_trichotomy(
     # namespaces belong to the device, and a fresh local store mints keys
     # from index 0, so a second store on the interrupt rig's device would
     # conflict on the homeserver (400: one-time key already exists).
-    refusal_login = _login(env.base_url, _BOT_LOCALPART, _BOT_PASSWORD)
+    refusal_login = login(env.base_url, BOT_LOCALPART, BOT_PASSWORD)
     refusal_rig = await _managed_rig(
         d2_resources,
         env,
@@ -1531,7 +991,7 @@ async def test_d2_interrupted_send_trichotomy(
 
         # Independent recipient observation: the homeserver ACTUALLY accepted
         # the interrupted send. The client could not have known this.
-        accepted_ids = await _peer_find_body(
+        accepted_ids = await peer_find_body(
             peer_client, room_id, interrupted_body, attempts=10
         )
         assert accepted_ids, (
@@ -1593,7 +1053,7 @@ async def test_d2_interrupted_send_trichotomy(
         )
         # Successful recipient syncs after recovery, with distinct native IDs
         # including undecryptable Megolm events from the fixture sender.
-        await _peer_timeline(peer_client, room_id, attempts=3)
+        await peer_timeline(peer_client, room_id, attempts=3)
         final_ids = {
             event_id
             for event_id, sender in peer_client._d2_message_events.items()
@@ -1649,8 +1109,8 @@ async def test_d2_native_cooldown_and_operator_view(
     for store_dir in (rig_store, peer_store):
         Path(store_dir).mkdir(parents=True, exist_ok=True)
 
-    peer_client = await _init_peer_client(
-        env, _RL_PEER_LOCALPART, _RL_PEER_PASSWORD, peer_store
+    peer_client = await init_peer_client(
+        env, RL_PEER_LOCALPART, RL_PEER_PASSWORD, peer_store
     )
     d2_resources.push_async_callback(peer_client.close)
     verdict: dict[str, Any] = {
@@ -1737,7 +1197,7 @@ async def test_d2_native_cooldown_and_operator_view(
         assert rig.adapter.diagnostics().get("outbound_cooldown_deferrals", 0) >= 1
         verdict["phases"]["cooldown_gate"] = "deferred_without_wire"
 
-        seen = await _peer_find_body(peer_client, room_id, "d2 cooldown first message")
+        seen = await peer_find_body(peer_client, room_id, "d2 cooldown first message")
         assert seen, "recipient never decrypted the first send"
         verdict["phases"]["first_send"] = "delivered"
 
@@ -1754,7 +1214,7 @@ async def test_d2_native_cooldown_and_operator_view(
         ), "server-directed cooldown never expired"
         await _await_outbox_terminal(rig, "d2-evt-rl-second", "sent")
         second_native = await _await_native_ref(rig, "d2-evt-rl-second")
-        second_seen = await _peer_find_body(
+        second_seen = await peer_find_body(
             peer_client, room_id, "d2 cooldown limited message", attempts=10
         )
         assert (
@@ -1799,22 +1259,28 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
     for store_dir in (rig_store, peer_store):
         Path(store_dir).mkdir(parents=True, exist_ok=True)
 
-    peer_client = await _init_peer_client(
-        env, _PEER_LOCALPART, _PEER_PASSWORD, peer_store
+    upstream_port = urlsplit(env.base_url).port
+    assert upstream_port is not None
+    proxy = SendResponseCutProxy("127.0.0.1", upstream_port)
+    proxy.armed = False
+    port = await proxy.start()
+    d2_resources.push_async_callback(proxy.close)
+    # Docker chooses a fresh published port on restart. Keep the Matrix
+    # origin stable for both clients and change only the test proxy's upstream.
+    client_env = replace(env, base_url=f"http://127.0.0.1:{port}")
+    peer_client = await init_peer_client(
+        client_env, PEER_LOCALPART, PEER_PASSWORD, peer_store
     )
     d2_resources.push_async_callback(peer_client.close)
     verdict: dict[str, Any] = {
         "transport": "matrix",
         "evidence_level": "docker_encrypted_room_qualification",
         "scenario": "bounded_unavailable_server",
-        "limitations": [
-            "Session calls are counted; encryption preparation may fail before a room-send HTTP request."
-        ],
         "phases": {},
     }
     rig = await _managed_rig(
         d2_resources,
-        env,
+        client_env,
         adapter_id="d2-unavailable-target",
         store_path=rig_store,
         db_path=db_path,
@@ -1839,12 +1305,13 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         finally:
             await baseline_worker.stop()
             assert not baseline_worker.has_retained_work
-        seen = await _peer_find_body(peer_client, room_id, "d2 unavailable baseline")
+        seen = await peer_find_body(peer_client, room_id, "d2 unavailable baseline")
         assert seen, "recipient never decrypted the baseline send"
         verdict["phases"]["baseline"] = "delivered"
 
         # Stop the homeserver container: a genuinely unavailable server.
-        _docker("stop", env.container, timeout=90)
+        docker("stop", env.container, timeout=90)
+        sends_before = proxy.room_send_requests
         unavailable_body = "d2 sent while server unavailable"
         await _admit_message(rig, "d2-evt-down", unavailable_body)
 
@@ -1875,11 +1342,13 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
             await down_worker.stop()
             assert not down_worker.has_retained_work
         down_row = await _await_outbox_status(rig, "d2-evt-down", "retry_wait")
-        # The in-adapter retry policy is bounded: exactly the configured
-        # attempts for this pipeline attempt, then the failure is recorded.
+        # The transport observation is independent of the session-call
+        # count. aiohttp may retry an idempotent PUT once on disconnect.
         assert (
             0 < room_send_calls <= 3
         ), f"unavailable-server session calls must be bounded, saw {room_send_calls}"
+        wire_sends = proxy.room_send_requests - sends_before
+        assert 0 < wire_sends <= 2 * room_send_calls
         assert "transient" in (
             down_row.failure_kind or ""
         ), f"unavailable server must be transient, got {down_row.failure_kind!r}"
@@ -1892,6 +1361,7 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         verdict["phases"]["unavailable_server"] = {
             "outcome": "retry_wait",
             "session_room_send_calls": room_send_calls,
+            "client_room_send_http_requests": wire_sends,
             "failure_kind": down_row.failure_kind,
             "native_ref": None,
         }
@@ -1900,12 +1370,14 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         assert len(down_tx) == 1 and None not in down_tx
         transaction_ids.clear()
         # Server returns; the recovery owner re-dispatches the retained row.
-        _docker("start", env.container, timeout=90)
-        assert (
-            "http://" + _docker("port", env.container, "8008/tcp", timeout=15).strip()
-            == env.base_url
+        docker("start", env.container, timeout=90)
+        upstream_url = (
+            "http://" + docker("port", env.container, "8008/tcp", timeout=15).strip()
         )
-        _wait_ready(env.base_url)
+        upstream_port = urlsplit(upstream_url).port
+        assert upstream_port is not None
+        wait_ready(upstream_url)
+        proxy.set_upstream("127.0.0.1", upstream_port)
         recovery_worker = _start_retry_worker(
             rig.storage,
             rig.runner,
@@ -1925,7 +1397,7 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
             set(transaction_ids) == down_tx
         ), "outage recovery changed transaction identity"
         recovered_native = await _await_native_ref(rig, "d2-evt-down")
-        recovered_seen = await _peer_find_body(
+        recovered_seen = await peer_find_body(
             peer_client, room_id, unavailable_body, attempts=10
         )
         assert (
@@ -1936,7 +1408,5 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
             "native_ref_redacted": _redact(recovered_native),
         }
     finally:
-        with contextlib.suppress(subprocess.SubprocessError, OSError):
-            _docker("start", env.container, timeout=90)
         await _stop_rig(rig)
     _write_verdict(tmp_path, "d2-scenario4b-unavailable-verdict.json", verdict)
