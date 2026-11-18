@@ -70,6 +70,14 @@ SDK store. This is an identity binding, not arbitrary homeserver migration.
 
 The nio_durable application checkpoint records accepted stream and sequence
 identity plus recovery-loss metadata; it MUST NOT be used as an upstream cursor.
+The `checkpoint_owned_by_medre` diagnostic concerns upstream Classic Sync
+cursor ownership and remains false for SDK-owned durable sync. The
+`committed_checkpoint_present` diagnostic reports restored Classic migration
+evidence or `nio_durable` application checkpoint evidence. A restored durable
+checkpoint needs valid metadata and a nonempty stream ID with a decimal
+sequence. A live batch sets the flag after the host commits its checkpoint.
+SDK capture alone MUST NOT set this flag. Neither diagnostic establishes
+connectivity or receipt.
 Attachment acquisition retry checkpoints retain their independent authority.
 
 An adopted database cannot be opened by the ordinary SDK store. Operators MUST

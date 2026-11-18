@@ -339,6 +339,7 @@ class MatrixSession:
         "_durable_owner",
         "_batch_consumer",
         "_committed_sync_token",
+        "_application_checkpoint_present",
         "_recovered_event_count",
         "_history_event_count",
         "_recovery_abandoned_rooms",
@@ -427,6 +428,7 @@ class MatrixSession:
             )
         )
         self._committed_sync_token: str | None = None
+        self._application_checkpoint_present = False
         self._recovered_event_count = 0
         self._history_event_count = 0
         self._recovery_abandoned_rooms: dict[str, tuple[str, ...]] = {}
@@ -842,6 +844,7 @@ class MatrixSession:
         self._last_stale_sync_at = None
         self._last_successful_sync = None
         self._committed_sync_token = None
+        self._application_checkpoint_present = False
         self._recovered_event_count = 0
         self._history_event_count = 0
         self._attachment_fetch_deferrals = {}
@@ -976,6 +979,7 @@ class MatrixSession:
             sort_keys=True,
         )
         await committer("nio_durable", f"{batch.stream_id}:{batch.sequence}", metadata)
+        self._application_checkpoint_present = True
 
     def _notify_health_change(self) -> None:
         """Signal owned native progress without letting diagnostics interrupt sync."""
@@ -1775,6 +1779,8 @@ class MatrixSession:
         loader = self._checkpoint_loader
         if loader is None:
             raise RuntimeError("durable Matrix sync has no checkpoint loader")
+        self._application_checkpoint_present = False
+        self._committed_sync_token = None
         legacy = await loader("classic_sync")
         durable_checkpoint = await loader("nio_durable")
         checkpoint = durable_checkpoint or legacy
@@ -1819,6 +1825,11 @@ class MatrixSession:
                 self._logger.warning(
                     "Ignoring malformed Matrix checkpoint recovery metadata"
                 )
+        if durable_checkpoint is not None:
+            stream_id, _, sequence = durable_checkpoint.cursor.rpartition(":")
+            self._application_checkpoint_present = bool(
+                stream_id and sequence.isascii() and sequence.isdecimal()
+            )
 
     async def _finalize_start(self, *, start_sync: bool = True) -> None:
         """Common post-client-creation steps: validate login, register callbacks, start sync task."""
@@ -3378,15 +3389,6 @@ class MatrixSession:
         material.
         """
 
-        def _durable_cursor_present(owner: Any) -> bool:
-            """A reloaded durable owner with a committed position counts."""
-            if owner is None:
-                return False
-            try:
-                return owner.cursor is not None
-            except Exception:
-                return False
-
         # Compute E2EE diagnostics from live client state.
         # Durable plaintext sessions also own real crypto storage. Ordinary
         # plaintext test doubles must not fabricate loaded-backend evidence.
@@ -3456,17 +3458,11 @@ class MatrixSession:
             stale_sync_recoveries=self._stale_sync_recoveries,
             last_stale_sync_at=self._last_stale_sync_at,
             last_successful_sync=self._last_successful_sync,
-            checkpoint_owned_by_medre=(
-                self._durable_owner is not None
-                or self._committed_sync_token is not None
-            ),
+            # The SDK owns its upstream cursor. A captured SDK position is
+            # not proof of committed MEDRE application acceptance.
+            checkpoint_owned_by_medre=False,
             committed_checkpoint_present=(
-                self._committed_sync_token is not None
-                or (
-                    self._batch_consumer is not None
-                    and self._batch_consumer.last_acked_sequence is not None
-                )
-                or _durable_cursor_present(self._durable_owner)
+                self._application_checkpoint_present or bool(self._committed_sync_token)
             ),
             classic_ack_deferrals=self._classic_ack_deferrals,
             recovered_event_count=self._recovered_event_count,

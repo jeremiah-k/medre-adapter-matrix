@@ -528,3 +528,45 @@ async def test_load_checkpoint_warns_and_discards_malformed_nested_metadata(
     logger.warning.assert_called_once_with(
         "Ignoring malformed Matrix checkpoint recovery metadata"
     )
+
+
+async def test_diagnostics_distinguish_sdk_capture_and_application_evidence() -> None:
+    commit = AsyncMock()
+    session = _durable_session(checkpoint_committer=commit)
+    # Capture can advance before application admission; do not infer evidence.
+    session._durable_owner = SimpleNamespace(cursor="sdk-captured")
+    assert not session.diagnostics().checkpoint_owned_by_medre
+    assert not session.diagnostics().committed_checkpoint_present
+    commit.side_effect = RuntimeError("host write failed")
+    batch = SimpleNamespace(stream_id="stream", sequence=4)
+    with pytest.raises(RuntimeError, match="host write failed"):
+        await session._accept_sync_batch(batch)
+    assert not session.diagnostics().committed_checkpoint_present
+    commit.side_effect = None
+    await session._accept_sync_batch(batch)
+    assert session.diagnostics().committed_checkpoint_present
+    assert not session.diagnostics().checkpoint_owned_by_medre
+
+
+@pytest.mark.parametrize(
+    ("cursor", "present"),
+    [("stream:4", True), ("", False), ("stream", False), ("stream:-1", False)],
+)
+async def test_diagnostics_restore_application_checkpoint_without_sdk_cursor(
+    cursor: str, present: bool
+) -> None:
+    async def load(stream: str) -> AdapterCheckpoint | None:
+        if stream != "nio_durable":
+            return None
+        return AdapterCheckpoint(
+            adapter_id="matrix-test",
+            stream=stream,
+            cursor=cursor,
+            metadata_json='{"schema_version":1,"abandoned_rooms":{}}',
+            updated_at="2026-11-18T00:00:00Z",
+        )
+
+    session = _durable_session(checkpoint_loader=load)
+    await session._load_classic_checkpoint()
+    assert session.diagnostics().committed_checkpoint_present is present
+    assert not session.diagnostics().checkpoint_owned_by_medre

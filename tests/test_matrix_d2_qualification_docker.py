@@ -461,24 +461,6 @@ def _redact(value: str | None) -> str:
     return value[:2] + "****" + value[-2:]
 
 
-def _close_nio_store(client: Any) -> None:
-    """Close the nio store's SQLite connection the session stop misses."""
-    store = getattr(client, "store", None)
-    database = getattr(store, "database", None)
-    if database is None:
-        return
-    try:
-        from playhouse.sqliteq import SqliteQueueDatabase
-
-        if isinstance(database, SqliteQueueDatabase) and not database.is_stopped():
-            database.stop()
-    except ImportError:
-        pass
-    with contextlib.suppress(Exception):
-        if not database.is_closed():
-            database.close()
-
-
 async def _init_peer_client(
     env: SynapseEnv, localpart: str, password: str, store_path: str
 ) -> Any:
@@ -938,58 +920,66 @@ async def _start_rig(
     uninitialized session.
     """
     room_id = target_room_id or env.encrypted_room_id
-    storage = SQLiteStorage(db_path=db_path)
-    await storage.initialize()
-    config = _make_matrix_config(
-        env,
-        adapter_id=adapter_id,
-        store_path=store_path,
-        homeserver=homeserver,
-        room_ids=(room_id,),
-        verification_policy=verification_policy,
-        encryption_mode=encryption_mode,
-        auto_join_rooms=auto_join_rooms,
-        bot_access_token=bot_access_token,
-        bot_device_id=bot_device_id,
-    )
-    adapter = MatrixAdapter(config)
-    runner = PipelineRunner(
-        _make_pipeline_config(storage, room_id, adapter_id, adapter)
-    )
-    worker = DurableIngressWorker(storage=storage, pipeline=runner)
-    retry_worker: RetryWorker | None = None
-    if with_retry_worker:
-        retry_worker = _start_retry_worker(
-            storage,
-            runner,
-            adapter_id,
-            enabled=True,
-            initial_dispatch=True,
-            interval_seconds=retry_interval_seconds,
+    async with contextlib.AsyncExitStack() as resources:
+        storage = SQLiteStorage(db_path=db_path)
+        resources.push_async_callback(storage.close)
+        await storage.initialize()
+        config = _make_matrix_config(
+            env,
+            adapter_id=adapter_id,
+            store_path=store_path,
+            homeserver=homeserver,
+            room_ids=(room_id,),
+            verification_policy=verification_policy,
+            encryption_mode=encryption_mode,
+            auto_join_rooms=auto_join_rooms,
+            bot_access_token=bot_access_token,
+            bot_device_id=bot_device_id,
         )
-    await runner.start()
-    await worker.start()
-    await adapter.start(_make_ctx(adapter_id, runner, storage))
-    if retry_worker is not None:
-        await retry_worker.start()
-    return D2Rig(
-        adapter=adapter,
-        runner=runner,
-        worker=worker,
-        retry_worker=retry_worker,
-        storage=storage,
-        db_path=db_path,
-        adapter_id=adapter_id,
-        store_path=store_path,
-        target_room_id=room_id,
-        homeserver_url=homeserver or env.base_url,
-    )
+        adapter = MatrixAdapter(config)
+        runner = PipelineRunner(
+            _make_pipeline_config(storage, room_id, adapter_id, adapter)
+        )
+        worker = DurableIngressWorker(storage=storage, pipeline=runner)
+        retry_worker: RetryWorker | None = None
+        if with_retry_worker:
+            retry_worker = _start_retry_worker(
+                storage,
+                runner,
+                adapter_id,
+                enabled=True,
+                initial_dispatch=True,
+                interval_seconds=retry_interval_seconds,
+            )
+        resources.push_async_callback(runner.stop)
+        await runner.start()
+        resources.push_async_callback(adapter.stop)
+        resources.push_async_callback(worker.stop, grace_seconds=5.0)
+        await worker.start()
+        await adapter.start(_make_ctx(adapter_id, runner, storage))
+        if retry_worker is not None:
+            resources.push_async_callback(retry_worker.stop)
+            await retry_worker.start()
+        rig = D2Rig(
+            adapter=adapter,
+            runner=runner,
+            worker=worker,
+            retry_worker=retry_worker,
+            storage=storage,
+            db_path=db_path,
+            adapter_id=adapter_id,
+            store_path=store_path,
+            target_room_id=room_id,
+            homeserver_url=homeserver or env.base_url,
+        )
+        resources.pop_all()
+        return rig
 
 
 async def _stop_retry_worker(rig: D2Rig) -> None:
     if rig.retry_worker is not None:
-        with contextlib.suppress(Exception):
-            await rig.retry_worker.stop()
+        await rig.retry_worker.stop()
+        assert not rig.retry_worker.has_retained_work
         rig.retry_worker = None
 
 
@@ -998,24 +988,15 @@ async def _stop_rig(rig: D2Rig) -> None:
 
     The nio store close must precede any store reopen by a restart phase.
     """
-    session = getattr(rig.adapter, "_session", None)
-    client = getattr(session, "_client", None) if session is not None else None
-    for name, stop_coro in (
-        ("d2-adapter", rig.adapter.stop()),
-        ("d2-retry-worker", rig.retry_worker.stop() if rig.retry_worker else None),
-        ("d2-worker", rig.worker.stop(grace_seconds=5.0)),
-        ("d2-runner", rig.runner.stop()),
-    ):
-        if stop_coro is None:
-            continue
-        try:
-            await stop_coro
-        except Exception:
-            logger.debug("%s cleanup error", name, exc_info=True)
-    if client is not None:
-        _close_nio_store(client)
-    with contextlib.suppress(Exception):
-        await rig.storage.close()
+    # End ingress and dispatch before retiring the native adapter. Do not
+    # force-close the SDK's database on a successful restart path: that would
+    # mask a production ownership/close defect in the qualification evidence.
+    async with contextlib.AsyncExitStack() as resources:
+        resources.push_async_callback(rig.storage.close)
+        resources.push_async_callback(rig.runner.stop)
+        resources.push_async_callback(rig.adapter.stop)
+        resources.push_async_callback(_stop_retry_worker, rig)
+        resources.push_async_callback(rig.worker.stop, grace_seconds=5.0)
 
 
 async def _admit_message(
@@ -1349,10 +1330,13 @@ async def test_d2_restart_preserves_device_checkpoint_and_transaction_identities
             checkpoint_after is not None
         ), "application checkpoint stream missing after restart"
         assert checkpoint_after.cursor, "checkpoint cursor empty after restart"
+        stream_before, seq_before = checkpoint_before.cursor.rsplit(":", 1)
+        stream_after, seq_after = checkpoint_after.cursor.rsplit(":", 1)
+        assert stream_before == stream_after and int(seq_after) >= int(seq_before)
         diagnostics = rig.adapter.diagnostics()
         assert (
-            diagnostics.get("checkpoint_owned_by_medre") is True
-        ), "restarted session must own its durable sync checkpoint via MEDRE"
+            diagnostics.get("checkpoint_owned_by_medre") is False
+        ), "the SDK retains upstream cursor ownership across restart"
         assert (
             diagnostics.get("committed_checkpoint_present") is True
         ), "restarted session must report the committed checkpoint it reloaded"
