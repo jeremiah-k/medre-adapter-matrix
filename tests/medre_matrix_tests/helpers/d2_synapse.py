@@ -164,7 +164,6 @@ def _boot_synapse(
     container = f"{container}-{uuid4().hex[:12]}"
     parent = Path(tempfile.mkdtemp(prefix="medre-d2-"))
     data_dir = parent / "synapse"
-    data_dir.mkdir(mode=0o700)
     # The host identity owns the data directory before the first container
     # starts, so config generation and the homeserver itself run unprivileged
     # and no root-mode ownership step inside Docker is ever needed. The
@@ -172,12 +171,16 @@ def _boot_synapse(
     uid = os.getuid() or 991
     gid = os.getgid() if os.getuid() else 991
     identity = f"{uid}:{gid}"
-    if not os.getuid():
-        os.chown(data_dir, uid, gid)
+    generator = f"{container}-generate"
     try:
+        data_dir.mkdir(mode=0o700)
+        if not os.getuid():
+            os.chown(data_dir, uid, gid)
         docker(
             "run",
             "--rm",
+            "--name",
+            generator,
             "--user",
             identity,
             "-e",
@@ -304,10 +307,23 @@ def _boot_synapse(
         )
         yield env
     finally:
-        with contextlib.suppress(subprocess.SubprocessError, OSError):
-            docker("rm", "-f", container, timeout=90)
-        shutil.rmtree(data_dir)
-        parent.rmdir()
+        # A timed-out docker run can leave the generator alive. Try both
+        # removals even if one fails, and preserve the private bind target
+        # when retirement cannot be confirmed.
+        failures: list[Exception] = []
+        for name in (container, generator):
+            try:
+                present = docker("ps", "-aq", "--filter", f"name=^/{name}$", timeout=15)
+                if present.strip():
+                    docker("rm", "-f", name, timeout=90)
+            except (OSError, subprocess.SubprocessError) as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup(
+                f"Synapse retirement failed; retained private data at {parent}",
+                failures,
+            )
+        shutil.rmtree(parent)
 
 
 @pytest.fixture
