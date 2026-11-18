@@ -3377,6 +3377,16 @@ class MatrixSession:
         Never exposes secrets, access tokens, keys, or private device
         material.
         """
+
+        def _durable_cursor_present(owner: Any) -> bool:
+            """A reloaded durable owner with a committed position counts."""
+            if owner is None:
+                return False
+            try:
+                return owner.cursor is not None
+            except Exception:
+                return False
+
         # Compute E2EE diagnostics from live client state.
         # Durable plaintext sessions also own real crypto storage. Ordinary
         # plaintext test doubles must not fabricate loaded-backend evidence.
@@ -3446,13 +3456,17 @@ class MatrixSession:
             stale_sync_recoveries=self._stale_sync_recoveries,
             last_stale_sync_at=self._last_stale_sync_at,
             last_successful_sync=self._last_successful_sync,
-            checkpoint_owned_by_medre=False,
+            checkpoint_owned_by_medre=(
+                self._durable_owner is not None
+                or self._committed_sync_token is not None
+            ),
             committed_checkpoint_present=(
                 self._committed_sync_token is not None
                 or (
                     self._batch_consumer is not None
                     and self._batch_consumer.last_acked_sequence is not None
                 )
+                or _durable_cursor_present(self._durable_owner)
             ),
             classic_ack_deferrals=self._classic_ack_deferrals,
             recovered_event_count=self._recovered_event_count,
