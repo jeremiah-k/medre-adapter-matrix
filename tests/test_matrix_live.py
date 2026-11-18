@@ -112,9 +112,19 @@ Docker (optional, not required):
 
 .. code-block:: bash
 
-    docker run -d --name synapse -p 8008:8008 \\
+    # Create the data directory as your own user so the container never
+    # needs root, then generate the initial homeserver config.
+    mkdir -p synapse-data
+    docker run --rm --user "$(id -u):$(id -g)" \\
       -e SYNAPSE_SERVER_NAME=localhost \\
       -e SYNAPSE_REPORT_STATS=no \\
+      -v "$PWD/synapse-data:/data" \\
+      matrixdotorg/synapse:latest generate
+    docker run -d --name synapse -p 8008:8008 \\
+      --user "$(id -u):$(id -g)" \\
+      -e SYNAPSE_SERVER_NAME=localhost \\
+      -e SYNAPSE_REPORT_STATS=no \\
+      -v "$PWD/synapse-data:/data" \\
       matrixdotorg/synapse:latest
     docker exec synapse register_new_matrix_user \\
       -u bot -p secret -c /data/homeserver.yaml http://localhost:8008
