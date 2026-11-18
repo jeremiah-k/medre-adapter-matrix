@@ -1779,15 +1779,13 @@ class MatrixSession:
         loader = self._checkpoint_loader
         if loader is None:
             raise RuntimeError("durable Matrix sync has no checkpoint loader")
-        self._application_checkpoint_present = False
-        self._committed_sync_token = None
+        application_checkpoint_present = False
         legacy = await loader("classic_sync")
         durable_checkpoint = await loader("nio_durable")
         checkpoint = durable_checkpoint or legacy
         await self._load_attachment_fetch_deferrals()
-        self._committed_sync_token = legacy.cursor if legacy is not None else None
-        self._recovery_abandoned_rooms = {}
-        self._recovery_last_abandonment = None
+        committed_sync_token = legacy.cursor if legacy is not None else None
+        restored: dict[str, tuple[str, ...]] = {}
         if durable_checkpoint is not None and not durable_checkpoint.metadata_json:
             raise MatrixConnectionError("Invalid Matrix durable checkpoint evidence")
         if checkpoint is not None and checkpoint.metadata_json:
@@ -1808,15 +1806,14 @@ class MatrixSession:
                 raw_rooms = stored.get("abandoned_rooms", {})
                 if not isinstance(raw_rooms, dict):
                     raise ValueError("abandoned_rooms must be an object")
-                restored: dict[str, tuple[str, ...]] = {}
+                recovered: dict[str, tuple[str, ...]] = {}
                 for room_id, reasons in raw_rooms.items():
                     if not isinstance(reasons, (list, tuple)) or not all(
                         isinstance(reason, str) for reason in reasons
                     ):
                         raise ValueError("abandoned room reasons must be strings")
-                    restored[str(room_id)] = tuple(sorted(reasons))
-                self._recovery_abandoned_rooms = restored
-                self._recovery_last_abandonment = self._abandonment_diagnostic(restored)
+                    recovered[str(room_id)] = tuple(sorted(reasons))
+                restored = recovered
             except (TypeError, ValueError) as error:
                 if durable_checkpoint is not None:
                     raise MatrixConnectionError(
@@ -1827,9 +1824,15 @@ class MatrixSession:
                 )
         if durable_checkpoint is not None:
             stream_id, _, sequence = durable_checkpoint.cursor.rpartition(":")
-            self._application_checkpoint_present = bool(
+            application_checkpoint_present = bool(
                 stream_id and sequence.isascii() and sequence.isdecimal()
             )
+        # Publish together after the awaited reads and validation succeed. An
+        # owner reopen must not transiently erase known committed evidence.
+        self._application_checkpoint_present = application_checkpoint_present
+        self._committed_sync_token = committed_sync_token
+        self._recovery_abandoned_rooms = restored
+        self._recovery_last_abandonment = self._abandonment_diagnostic(restored)
 
     async def _finalize_start(self, *, start_sync: bool = True) -> None:
         """Common post-client-creation steps: validate login, register callbacks, start sync task."""

@@ -543,7 +543,27 @@ async def test_diagnostics_distinguish_sdk_capture_and_application_evidence() ->
         await session._accept_sync_batch(batch)
     assert not session.diagnostics().committed_checkpoint_present
     commit.side_effect = None
+    commit.reset_mock()
     await session._accept_sync_batch(batch)
+    commit.assert_awaited_once()
+    stream, cursor, metadata = commit.await_args.args
+    assert (stream, cursor) == ("nio_durable", "stream:4")
+    assert json.loads(metadata) == {"schema_version": 1, "abandoned_rooms": {}}
+
+    async def reload(name):
+        if name == stream:
+            return AdapterCheckpoint(
+                adapter_id="matrix-test",
+                stream=stream,
+                cursor=cursor,
+                metadata_json=metadata,
+                updated_at="2026-11-18T00:00:00Z",
+            )
+        return None
+
+    reopened = _durable_session(checkpoint_loader=reload)
+    await reopened._load_classic_checkpoint()
+    assert reopened.diagnostics().committed_checkpoint_present
     assert session.diagnostics().committed_checkpoint_present
     assert not session.diagnostics().checkpoint_owned_by_medre
 
@@ -570,3 +590,21 @@ async def test_diagnostics_restore_application_checkpoint_without_sdk_cursor(
     await session._load_classic_checkpoint()
     assert session.diagnostics().committed_checkpoint_present is present
     assert not session.diagnostics().checkpoint_owned_by_medre
+
+
+async def test_failed_checkpoint_reload_preserves_known_evidence():
+    commit = AsyncMock()
+    session = _durable_session(checkpoint_committer=commit)
+    await session._accept_sync_batch(SimpleNamespace(stream_id="stream", sequence=4))
+
+    async def unavailable(name):
+        assert session.diagnostics().committed_checkpoint_present
+        raise RuntimeError("storage unavailable")
+
+    session._checkpoint_loader = unavailable
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        await session._load_classic_checkpoint()
+    assert session.diagnostics().committed_checkpoint_present
+    session._checkpoint_loader = AsyncMock(return_value=None)
+    await session._load_classic_checkpoint()
+    assert not session.diagnostics().committed_checkpoint_present

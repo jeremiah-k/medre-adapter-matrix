@@ -74,9 +74,9 @@ The `checkpoint_owned_by_medre` diagnostic concerns upstream Classic Sync
 cursor ownership and remains false for SDK-owned durable sync. The
 `committed_checkpoint_present` diagnostic reports restored Classic migration
 evidence or `nio_durable` application checkpoint evidence. A restored durable
-checkpoint needs valid metadata and a nonempty stream ID with a decimal
-sequence. A live batch sets the flag after the host commits its checkpoint.
-SDK capture alone MUST NOT set this flag. Neither diagnostic establishes
+checkpoint needs valid metadata and a nonempty stream ID with a sequence of one or more ASCII digits (`0`–`9`). A live batch sets the flag after the host commits its checkpoint.
+SDK capture alone MUST NOT set this flag. Reloading an SDK owner retains the
+last known application evidence until the storage read and validation succeed. Neither diagnostic establishes
 connectivity or receipt.
 Attachment acquisition retry checkpoints retain their independent authority.
 
