@@ -339,6 +339,7 @@ class MatrixSession:
         "_durable_owner",
         "_batch_consumer",
         "_committed_sync_token",
+        "_application_checkpoint_present",
         "_recovered_event_count",
         "_history_event_count",
         "_recovery_abandoned_rooms",
@@ -427,6 +428,7 @@ class MatrixSession:
             )
         )
         self._committed_sync_token: str | None = None
+        self._application_checkpoint_present = False
         self._recovered_event_count = 0
         self._history_event_count = 0
         self._recovery_abandoned_rooms: dict[str, tuple[str, ...]] = {}
@@ -842,6 +844,7 @@ class MatrixSession:
         self._last_stale_sync_at = None
         self._last_successful_sync = None
         self._committed_sync_token = None
+        self._application_checkpoint_present = False
         self._recovered_event_count = 0
         self._history_event_count = 0
         self._attachment_fetch_deferrals = {}
@@ -976,6 +979,7 @@ class MatrixSession:
             sort_keys=True,
         )
         await committer("nio_durable", f"{batch.stream_id}:{batch.sequence}", metadata)
+        self._application_checkpoint_present = True
 
     def _notify_health_change(self) -> None:
         """Signal owned native progress without letting diagnostics interrupt sync."""
@@ -1775,13 +1779,13 @@ class MatrixSession:
         loader = self._checkpoint_loader
         if loader is None:
             raise RuntimeError("durable Matrix sync has no checkpoint loader")
+        application_checkpoint_present = False
         legacy = await loader("classic_sync")
         durable_checkpoint = await loader("nio_durable")
         checkpoint = durable_checkpoint or legacy
         await self._load_attachment_fetch_deferrals()
-        self._committed_sync_token = legacy.cursor if legacy is not None else None
-        self._recovery_abandoned_rooms = {}
-        self._recovery_last_abandonment = None
+        committed_sync_token = legacy.cursor if legacy is not None else None
+        restored: dict[str, tuple[str, ...]] = {}
         if durable_checkpoint is not None and not durable_checkpoint.metadata_json:
             raise MatrixConnectionError("Invalid Matrix durable checkpoint evidence")
         if checkpoint is not None and checkpoint.metadata_json:
@@ -1802,15 +1806,14 @@ class MatrixSession:
                 raw_rooms = stored.get("abandoned_rooms", {})
                 if not isinstance(raw_rooms, dict):
                     raise ValueError("abandoned_rooms must be an object")
-                restored: dict[str, tuple[str, ...]] = {}
+                recovered: dict[str, tuple[str, ...]] = {}
                 for room_id, reasons in raw_rooms.items():
                     if not isinstance(reasons, (list, tuple)) or not all(
                         isinstance(reason, str) for reason in reasons
                     ):
                         raise ValueError("abandoned room reasons must be strings")
-                    restored[str(room_id)] = tuple(sorted(reasons))
-                self._recovery_abandoned_rooms = restored
-                self._recovery_last_abandonment = self._abandonment_diagnostic(restored)
+                    recovered[str(room_id)] = tuple(sorted(reasons))
+                restored = recovered
             except (TypeError, ValueError) as error:
                 if durable_checkpoint is not None:
                     raise MatrixConnectionError(
@@ -1819,6 +1822,17 @@ class MatrixSession:
                 self._logger.warning(
                     "Ignoring malformed Matrix checkpoint recovery metadata"
                 )
+        if durable_checkpoint is not None:
+            stream_id, _, sequence = durable_checkpoint.cursor.rpartition(":")
+            application_checkpoint_present = bool(
+                stream_id and sequence.isascii() and sequence.isdecimal()
+            )
+        # Publish together after the awaited reads and validation succeed. An
+        # owner reopen must not transiently erase known committed evidence.
+        self._application_checkpoint_present = application_checkpoint_present
+        self._committed_sync_token = committed_sync_token
+        self._recovery_abandoned_rooms = restored
+        self._recovery_last_abandonment = self._abandonment_diagnostic(restored)
 
     async def _finalize_start(self, *, start_sync: bool = True) -> None:
         """Common post-client-creation steps: validate login, register callbacks, start sync task."""
@@ -3377,6 +3391,7 @@ class MatrixSession:
         Never exposes secrets, access tokens, keys, or private device
         material.
         """
+
         # Compute E2EE diagnostics from live client state.
         # Durable plaintext sessions also own real crypto storage. Ordinary
         # plaintext test doubles must not fabricate loaded-backend evidence.
@@ -3446,13 +3461,11 @@ class MatrixSession:
             stale_sync_recoveries=self._stale_sync_recoveries,
             last_stale_sync_at=self._last_stale_sync_at,
             last_successful_sync=self._last_successful_sync,
+            # The SDK owns its upstream cursor. A captured SDK position is
+            # not proof of committed MEDRE application acceptance.
             checkpoint_owned_by_medre=False,
             committed_checkpoint_present=(
-                self._committed_sync_token is not None
-                or (
-                    self._batch_consumer is not None
-                    and self._batch_consumer.last_acked_sequence is not None
-                )
+                self._application_checkpoint_present or bool(self._committed_sync_token)
             ),
             classic_ack_deferrals=self._classic_ack_deferrals,
             recovered_event_count=self._recovered_event_count,

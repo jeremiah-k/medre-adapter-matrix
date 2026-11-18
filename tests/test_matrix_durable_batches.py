@@ -60,7 +60,20 @@ def record(name: str = "one", kind: str = "timeline") -> SimpleNamespace:
 async def cancel(task: asyncio.Task[None]) -> None:
     """Join cancelled test work so failures cannot leak tasks into later tests."""
     task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    done, _ = await asyncio.wait({task}, timeout=5)
+    assert task in done, "cancelled test task did not retire"
+    if not task.cancelled():
+        task.result()
+
+
+async def test_cancel_surfaces_already_failed_background_task() -> None:
+    async def fail() -> None:
+        raise RuntimeError("runner failed")
+
+    task = asyncio.create_task(fail())
+    await asyncio.wait({task}, timeout=1)
+    with pytest.raises(RuntimeError, match="runner failed"):
+        await cancel(task)
 
 
 async def test_deferred_record_blocks_ack_and_does_not_repeat_accepted_prefix() -> None:
@@ -750,6 +763,7 @@ async def test_real_sdk_callback_deferral_preserves_committed_batch(
 
 
 @pytest.mark.matrix_sdk
+@pytest.mark.timeout(15, method="thread")
 async def test_idle_sdk_sync_produces_acknowledgeable_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -771,9 +785,13 @@ async def test_idle_sdk_sync_produces_acknowledgeable_progress(
     # The runner performs real network crypto maintenance between a quiet
     # response and its committed empty batch; the property under test is the
     # acknowledgeable progress itself, not key upload against a live server.
+    maintenance_calls = 0
+
     async def _no_crypto_maintenance() -> None:
-        """Isolate quiet source progress from unrelated network key maintenance."""
-        return None
+        """Only substitute the maintenance of this captured response."""
+        nonlocal maintenance_calls
+        maintenance_calls += 1
+        assert maintenance_calls == 1, "unexpected repeated crypto maintenance"
 
     monkeypatch.setattr(owner, "_maintain_crypto", _no_crypto_maintenance)
     runner = None
@@ -792,7 +810,12 @@ async def test_idle_sdk_sync_produces_acknowledgeable_progress(
             accepted=AsyncMock(),
             acknowledged=lambda b: progress.append(b.sequence),
         )
-        # The existing runner has already published the empty batch.
+        # Stop the producer while its committed batch is still present. The
+        # stub does not clear the SDK's real maintenance predicates, so letting
+        # it continue after ack could spin without an await.
+        await cancel(runner)
+        runner = None
+        assert maintenance_calls == 1
         task = asyncio.create_task(consumer.consume())
         try:
             assert await wait_until(lambda: len(progress) == 1)
@@ -800,10 +823,14 @@ async def test_idle_sdk_sync_produces_acknowledgeable_progress(
         finally:
             await cancel(task)
     finally:
-        if runner is not None:
-            await cancel(runner)
-        await owner.close()
-        await client.close()
+        try:
+            if runner is not None:
+                await cancel(runner)
+        finally:
+            try:
+                await owner.close()
+            finally:
+                await client.close()
 
 
 @pytest.mark.matrix_sdk
