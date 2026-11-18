@@ -600,7 +600,9 @@ async def _peer_find_body(
     return []
 
 
-async def _await_bot_sees_peer_device(rig: D2Rig, peer_user_id: str) -> None:
+async def _await_bot_sees_peer_device(
+    rig: D2Rig, peer_user_id: str, peer_device_id: str
+) -> None:
     """Wait until the adapter's device store holds the recipient device keys."""
 
     def _peer_known() -> bool:
@@ -610,7 +612,10 @@ async def _await_bot_sees_peer_device(rig: D2Rig, peer_user_id: str) -> None:
         if device_store is None:
             return False
         try:
-            return bool(list(device_store.active_user_devices(peer_user_id)))
+            return any(
+                device.id == peer_device_id
+                for device in device_store.active_user_devices(peer_user_id)
+            )
         except Exception:
             return False
 
@@ -1046,7 +1051,7 @@ async def test_d2_routed_outbound_recipient_decrypts_content_room_and_relation(
             store_path=rig_store,
             db_path=db_path,
         )
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
 
         # Parent message: routed through durable admission, the durable
         # outbox and the retry worker to the real encrypted send path.
@@ -1182,7 +1187,7 @@ async def test_d2_restart_preserves_device_and_checkpoint_identities(
         db_path=db_path,
     )
     try:
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
 
         # One delivered message before restart (delivered identity evidence).
         await _admit_message(rig, "d2-evt-pre-restart", "d2 pre-restart body")
@@ -1243,7 +1248,7 @@ async def test_d2_restart_preserves_device_and_checkpoint_identities(
             store_path=rig_store,
             db_path=db_path,
         )
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
 
         # Identity snapshot 2 and contract-tied equality assertions.
         client_after = rig.adapter._session._client
@@ -1490,7 +1495,7 @@ async def test_d2_interrupted_send_trichotomy(
     )
     server_event_id: str | None = None
     try:
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
         interrupted_body = "d2 interrupted send body"
         await _admit_message(rig, "d2-evt-interrupted", interrupted_body)
         dispatch_worker = _start_retry_worker(
@@ -1562,7 +1567,7 @@ async def test_d2_interrupted_send_trichotomy(
         with_retry_worker=False,
     )
     try:
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
         recovery_worker = _start_retry_worker(
             rig.storage,
             rig.runner,
@@ -1662,7 +1667,7 @@ async def test_d2_native_cooldown_and_operator_view(
         db_path=db_path,
     )
     try:
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
 
         native_limits: list[tuple[datetime, int]] = []
         original_send = MatrixSession.room_send
@@ -1816,7 +1821,7 @@ async def test_d2_bounded_unavailable_server_and_operator_view(
         with_retry_worker=False,
     )
     try:
-        await _await_bot_sees_peer_device(rig, env.peer_user_id)
+        await _await_bot_sees_peer_device(rig, env.peer_user_id, peer_client.device_id)
 
         # Healthy baseline while the server is up (single-shot dispatch).
         await _admit_message(rig, "d2-evt-up-baseline", "d2 unavailable baseline")
