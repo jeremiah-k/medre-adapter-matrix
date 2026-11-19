@@ -45,6 +45,9 @@ jobs:
       matrix:
         python: ["3.12", "3.13", "3.14"]
         mode: [fake, sdk]
+        include:
+          - python: "3.13"
+            mode: sdk-floor
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,8 +93,29 @@ jobs:
       - name: Install this adapter without native SDKs
         if: matrix.mode == 'fake'
         run: uv pip install --python .core/.venv/bin/python --no-deps -e .
+      - name: Select the declared Matrix SDK floor
+        if: matrix.mode == 'sdk-floor'
+        shell: bash
+        run: |
+          floor=$(.core/.venv/bin/python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          from packaging.requirements import Requirement
+          from packaging.utils import canonicalize_name
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          requirement, = (
+              req for raw in project["dependencies"] if
+              canonicalize_name((req := Requirement(raw)).name) == "mindroom-nio"
+          )
+          floor, = (spec.version for spec in requirement.specifier if spec.operator in {">=", "=="})
+          print(floor)
+          PY
+          )
+          printf 'mindroom-nio==%s\n' "$floor" > "$RUNNER_TEMP/matrix-sdk-floor.txt"
+          echo "UV_CONSTRAINT=$RUNNER_TEMP/matrix-sdk-floor.txt" >> "$GITHUB_ENV"
       - name: Install this adapter and its own SDK dependencies
-        if: matrix.mode == 'sdk'
+        if: matrix.mode == 'sdk' || matrix.mode == 'sdk-floor'
         run: .core/.venv/bin/python .core/scripts/ci/install_checkout_adapter.py --adapter . --test --python .core/.venv/bin/python
       - name: Validate candidate SDK revision
         if: matrix.mode == 'sdk' && inputs.sdk_ref != ''
@@ -126,8 +150,13 @@ jobs:
       - name: Run deterministic tests
         if: matrix.mode == 'fake'
         run: .core/.venv/bin/python -m pytest -q -ra
+      - name: Record the resolved Matrix SDK version
+        if: matrix.mode == 'sdk' || matrix.mode == 'sdk-floor'
+        shell: bash
+        run: |
+          .core/.venv/bin/python -c 'from importlib.metadata import version; print("Resolved Matrix SDK: mindroom-nio " + version("mindroom-nio"))' | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Run native SDK contracts
-        if: matrix.mode == 'sdk'
+        if: matrix.mode == 'sdk' || matrix.mode == 'sdk-floor'
         run: .core/.venv/bin/python -m pytest -v -m "matrix_sdk and not local_integration and not soak and not live and not hardware and not docker"
 
   windows-e2ee-contract:
