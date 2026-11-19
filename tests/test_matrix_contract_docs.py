@@ -5,6 +5,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 
 def _declared_sdk_requirement() -> str:
@@ -12,12 +14,15 @@ def _declared_sdk_requirement() -> str:
     root = Path(__file__).resolve().parent.parent
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     requirements = [
-        match.group(1)
-        for dependency in metadata["project"]["dependencies"]
-        if (match := re.match(r"(mindroom-nio\[[^\]]*\])\s*[<>=!~]", dependency))
+        requirement
+        for raw in metadata["project"]["dependencies"]
+        if canonicalize_name((requirement := Requirement(raw)).name) == "mindroom-nio"
     ]
-    assert len(requirements) == 1
-    return requirements[0]
+    (sdk,) = requirements
+    assert sdk.specifier and sdk.extras == {"e2e"}
+    (extra,) = map(Requirement, metadata["project"]["optional-dependencies"]["e2e"])
+    assert extra == sdk
+    return f"{sdk.name}[e2e]"
 
 
 def test_durable_sync_spec_names_the_pinned_sdk() -> None:
