@@ -79,6 +79,7 @@ from medre.adapters.matrix.outbound import (
 )
 from medre.adapters.matrix.relations import MatrixRelationHandler
 from medre.adapters.matrix.session import MatrixSession
+from medre.adapters.matrix.startup_info import build_startup_info
 from medre.config.adapters.matrix import MatrixConfig
 
 _logger = logging.getLogger(__name__)
@@ -733,6 +734,55 @@ class MatrixAdapter(AdapterContract):
             version="0.1.0",
             capabilities=self._capabilities,
             health=health,
+        )
+
+    # -- Startup info -------------------------------------------------------
+
+    def startup_info(self) -> dict[str, Any]:
+        """Report held identity facts for core's startup block.
+
+        Core discovers this optional callable duck-typed on the adapter
+        object (``getattr``) and calls it once at the adapter's ready
+        transition under a bounded, supervised wait.  Failure or expiry
+        only means no startup facts; it never affects readiness.  The
+        seam is plain data — this adapter needs no core symbols for it,
+        so it stays installable against older cores that never look for
+        the callable.
+
+        Pure read: no homeserver or network I/O, no resource
+        acquisition, no session mutation.  The method binds the session
+        once and takes one coherent client-identity snapshot through the
+        session boundary; a concurrent client replacement cannot mix
+        identity fields from different clients.  Core runs synchronous
+        hooks on a worker thread, and the snapshot reads only plain
+        attributes, so the call is safe there.
+
+        Row 0 is the authenticated account identity: the user ID and the
+        device ID the logged-in client holds.  This adapter's readiness
+        is degraded until the first sync acknowledgement, and emission
+        belongs at the true ready transition with whatever identity is
+        held by then — facts are omitted until actually held and never
+        probed (no ``whoami`` or other request fills a gap), and no fact
+        gates or delays readiness.  Row 1 carries the configured
+        homeserver and the installed transport SDK version read from
+        installed package metadata at runtime.  Access tokens and all
+        olm/identity key material are never offered; redaction remains
+        core's render-boundary responsibility.
+
+        Returns
+        -------
+        dict[str, Any]
+            An ordered ``rows`` mapping per the core startup-info
+            contract.  Rows with no held facts are omitted.
+        """
+        session = self._session
+        user_id, device_id = (
+            session.client_identity() if session is not None else (None, None)
+        )
+        return build_startup_info(
+            homeserver=self._config.homeserver,
+            user_id=user_id,
+            device_id=device_id,
         )
 
     # -- Outbound delivery --------------------------------------------------
