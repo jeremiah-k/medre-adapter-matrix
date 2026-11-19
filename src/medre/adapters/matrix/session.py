@@ -604,6 +604,32 @@ class MatrixSession:
             return False
         return getattr(self._client, "access_token", None) is not None
 
+    def client_identity(self) -> tuple[str | None, str | None]:
+        """Return the ``(user_id, device_id)`` the underlying client holds.
+
+        Session-boundary snapshot for display surfaces such as the
+        adapter's startup info.  Each value is returned only when the
+        client actually holds it as a non-empty string — absent values
+        are ``None`` and are never probed (no ``whoami`` or other
+        request is issued to fill a gap).  The snapshot never includes
+        the access token or any key material.  Safe to call when the
+        client is not initialised.
+
+        The client object is bound once before its attributes are read,
+        so a concurrent client replacement cannot mix identity fields
+        from different clients; the plain attribute reads are safe from
+        any worker thread.
+        """
+        client = self._client
+        if client is None:
+            return None, None
+        user_id = getattr(client, "user_id", None)
+        device_id = getattr(client, "device_id", None)
+        return (
+            user_id if isinstance(user_id, str) and user_id else None,
+            device_id if isinstance(device_id, str) and device_id else None,
+        )
+
     def is_room_member(self, room_id: str) -> bool:
         """Return ``True`` if the session has joined the given room.
 

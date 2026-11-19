@@ -79,6 +79,7 @@ from medre.adapters.matrix.outbound import (
 )
 from medre.adapters.matrix.relations import MatrixRelationHandler
 from medre.adapters.matrix.session import MatrixSession
+from medre.adapters.matrix.startup_info import build_startup_info
 from medre.config.adapters.matrix import MatrixConfig
 
 _logger = logging.getLogger(__name__)
@@ -733,6 +734,20 @@ class MatrixAdapter(AdapterContract):
             version="0.1.0",
             capabilities=self._capabilities,
             health=health,
+        )
+
+    # -- Startup info -------------------------------------------------------
+
+    def startup_info(self) -> dict[str, object]:
+        """Report the held Matrix account and device without a network request."""
+        session = self._session
+        user_id, device_id = (
+            session.client_identity() if session is not None else (None, None)
+        )
+        return build_startup_info(
+            homeserver=self._config.homeserver,
+            user_id=user_id,
+            device_id=device_id,
         )
 
     # -- Outbound delivery --------------------------------------------------
