@@ -12,7 +12,6 @@ Access tokens and key material are never offered.
 from __future__ import annotations
 
 import ast
-import importlib.metadata
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -58,11 +57,11 @@ def _fact_names(payload: dict[str, Any]) -> list[str]:
     return [f["name"] for row in payload["rows"] for f in row]
 
 
-def _identity_facts(payload: dict[str, Any]) -> list[tuple[str, str, str]]:
+def _identity_facts(payload: dict[str, Any]) -> list[tuple[str, str, str | None]]:
     """(name, value, label) triples from the identity row, if any."""
     for row in payload["rows"]:
         if row and row[0]["name"] in {"user_id", "device_id"}:
-            return [(f["name"], f["value"], f["label"]) for f in row]
+            return [(f["name"], f["value"], f.get("label")) for f in row]
     return []
 
 
@@ -94,15 +93,14 @@ def test_unstarted_adapter_omits_client_identity() -> None:
     assert "homeserver" in names
 
 
-def test_held_client_identity_forms_the_first_row(monkeypatch) -> None:
+def test_held_client_identity_forms_the_first_row() -> None:
     """The logged-in client's user and device identity lead, endpoint follows."""
-    monkeypatch.setattr(startup_info_module, "_sdk_version", lambda: None)
     adapter = MatrixAdapter(_make_matrix_config())
     _wire_mock_session(adapter, _identity_client())
     payload = adapter.startup_info()
     assert len(payload["rows"]) == 2
     assert _identity_facts(payload) == [
-        ("user_id", "@bot:example.com", "user"),
+        ("user_id", "@bot:example.com", None),
         ("device_id", "MOCKDEVICE1", "device"),
     ]
     assert [f["name"] for f in payload["rows"][1]] == ["homeserver"]
@@ -122,7 +120,7 @@ def test_held_client_identity_forms_the_first_row(monkeypatch) -> None:
         pytest.param(
             "@bot:example.com",
             None,
-            [("user_id", "@bot:example.com", "user")],
+            [("user_id", "@bot:example.com", None)],
             id="user-only",
         ),
         pytest.param(
@@ -131,14 +129,16 @@ def test_held_client_identity_forms_the_first_row(monkeypatch) -> None:
         pytest.param(
             "@bot:example.com",
             "",
-            [("user_id", "@bot:example.com", "user")],
+            [("user_id", "@bot:example.com", None)],
             id="empty-device",
         ),
         pytest.param(None, None, [], id="nothing-held"),
     ],
 )
 def test_partial_identity_omits_missing_fields(
-    user_id: str | None, device_id: str | None, expected: list[tuple[str, str, str]]
+    user_id: str | None,
+    device_id: str | None,
+    expected: list[tuple[str, str, str | None]],
 ) -> None:
     """Absent identity fields are omitted, not fabricated or probed."""
     adapter = MatrixAdapter(_make_matrix_config())
@@ -198,40 +198,27 @@ async def test_stopped_adapter_reports_no_identity() -> None:
     assert _identity_facts(adapter.startup_info()) == []
 
 
-# ---------------------------------------------------------------------------
-# SDK version fact: installed metadata only, never a literal
-# ---------------------------------------------------------------------------
-
-
-def test_sdk_version_fact_tracks_installed_distribution() -> None:
-    """The SDK version comes from installed metadata or is omitted."""
-    try:
-        installed = importlib.metadata.version(startup_info_module._SDK_DISTRIBUTION)
-    except importlib.metadata.PackageNotFoundError:
-        installed = None
-    payload = startup_info_module.build_startup_info(
-        homeserver="https://matrix.example.com"
-    )
-    names = _fact_names(payload)
-    if installed is None:
-        assert "sdk_version" not in names
-    else:
-        value = next(
-            f["value"]
-            for row in payload["rows"]
-            for f in row
-            if f["name"] == "sdk_version"
-        )
-        assert value == installed
-
-
-def test_sdk_version_fact_is_offered_when_held(monkeypatch) -> None:
-    monkeypatch.setattr(startup_info_module, "_sdk_version", lambda: "9.9.9")
-    payload = startup_info_module.build_startup_info(
-        homeserver="https://matrix.example.com"
-    )
-    sdk = [f for row in payload["rows"] for f in row if f["name"] == "sdk_version"]
-    assert [(f["value"], f["label"]) for f in sdk] == [("9.9.9", "sdk")]
+@pytest.mark.parametrize(
+    ("homeserver", "shown"),
+    [
+        ("https://example.com", False),
+        ("https://EXAMPLE.COM:443/", False),
+        ("https://example.com:8448", True),
+        ("https://example.com/matrix", True),
+        ("http://example.com", True),
+        ("https://matrix.example.com", True),
+        ("https://user:fixture-password@example.com", False),
+        ("https://example.com?invite=fixture-value", False),
+    ],
+)
+def test_homeserver_is_shown_only_when_it_adds_endpoint_information(
+    homeserver: str, shown: bool
+) -> None:
+    config = _make_matrix_config(homeserver=homeserver)
+    adapter = MatrixAdapter(config)
+    _wire_mock_session(adapter, _identity_client())
+    payload = adapter.startup_info()
+    assert ("homeserver" in _fact_names(payload)) is shown
 
 
 # ---------------------------------------------------------------------------
@@ -296,11 +283,9 @@ def test_provider_module_imports_nothing_from_core() -> None:
 
 
 def _started_adapter_with_identity(
-    monkeypatch,
     **config_overrides: Any,
 ) -> tuple[MatrixAdapter, MagicMock, tuple[Any, Any]]:
     """Build an adapter whose started session holds a client identity."""
-    monkeypatch.setattr(startup_info_module, "_sdk_version", lambda: None)
     adapter = MatrixAdapter(_make_matrix_config(**config_overrides))
     mock_session = MagicMock(name="session")
     mock_session.start = AsyncMock()
@@ -324,9 +309,9 @@ def _started_adapter_with_identity(
     return adapter, mock_session, patcher
 
 
-async def test_started_adapter_emits_held_facts_through_core(monkeypatch) -> None:
+async def test_started_adapter_emits_held_facts_through_core() -> None:
     """At the ready transition the held identity renders through core."""
-    adapter, _mock_session, patchers = _started_adapter_with_identity(monkeypatch)
+    adapter, _mock_session, patchers = _started_adapter_with_identity()
     with patchers[0], patchers[1]:
         _, ctx = _make_adapter_context("matrix-1")
         await adapter.start(ctx)
@@ -336,7 +321,7 @@ async def test_started_adapter_emits_held_facts_through_core(monkeypatch) -> Non
             )
             assert info is not None
             assert [(f.name, f.row, f.label) for f in info.fields] == [
-                ("user_id", 0, "user"),
+                ("user_id", 0, None),
                 ("device_id", 0, "device"),
                 ("homeserver", 1, "homeserver"),
             ]
@@ -344,19 +329,16 @@ async def test_started_adapter_emits_held_facts_through_core(monkeypatch) -> Non
             assert info.fields[1].value == "MOCKDEVICE1"
             assert render_startup_info_block("matrix.matrix-1  ready", info) == (
                 "matrix.matrix-1  ready\n"
-                "  user @bot:example.com · device MOCKDEVICE1\n"
+                "  @bot:example.com · device MOCKDEVICE1\n"
                 "  homeserver https://matrix.example.com"
             )
         finally:
             await adapter.stop()
 
 
-async def test_degraded_unsynced_adapter_still_emits_held_identity(
-    monkeypatch,
-) -> None:
+async def test_degraded_unsynced_adapter_still_emits_held_identity() -> None:
     """Degraded-until-first-sync readiness does not delay or gate facts."""
     adapter, mock_session, patchers = _started_adapter_with_identity(
-        monkeypatch,
         # Disable the first-sync wait so start() completes in the degraded
         # "waiting for the first sync acknowledgement" state immediately.
         initial_sync_timeout_seconds=0,
@@ -381,8 +363,8 @@ async def test_degraded_unsynced_adapter_still_emits_held_identity(
             await adapter.stop()
 
 
-async def test_facts_pass_the_core_cache_boundary(monkeypatch, tmp_path: Path) -> None:
-    adapter, _mock_session, patchers = _started_adapter_with_identity(monkeypatch)
+async def test_facts_pass_the_core_cache_boundary(tmp_path: Path) -> None:
+    adapter, _mock_session, patchers = _started_adapter_with_identity()
     with patchers[0], patchers[1]:
         _, ctx = _make_adapter_context("matrix-1")
         await adapter.start(ctx)
