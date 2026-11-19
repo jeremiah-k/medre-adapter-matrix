@@ -7,6 +7,9 @@ import re
 import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
+
 _VERSION_LITERAL = re.compile(r"\d+(?:\.\d+){1,3}(?:[a-zA-Z0-9.+_-]*)?")
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,17 +19,17 @@ SCAN_DIRECTORIES = ("src", "tests", "scripts", "docs", ".github")
 SCAN_ROOT_FILES = ("README.md", "renovate.json", "DEPENDENCY_LICENSES.md")
 
 
-def _declared_runtime_pins() -> dict[str, str]:
+def _declared_runtime_pins() -> dict[str, list[str]]:
+    """Read exact SDK versions and compatibility bounds from project metadata."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
-    pins: dict[str, str] = {}
-    for requirement in project["dependencies"]:
-        if requirement.startswith("medre") or "==" not in requirement:
-            continue
-        name, _, value = requirement.partition("==")
-        pins[name.split("[", 1)[0]] = value
-    assert pins, "runtime SDK pins must be declared"
+    pins: dict[str, list[str]] = {}
+    for raw in project["dependencies"]:
+        requirement = Requirement(raw)
+        if canonicalize_name(requirement.name) != "medre":
+            pins[requirement.name] = [spec.version for spec in requirement.specifier]
+    assert pins and all(pins.values()), "runtime SDK constraints must be declared"
     return pins
 
 
@@ -44,9 +47,10 @@ def test_runtime_pin_values_stay_out_of_secondary_files():
     """A version-only dependency bump stays confined to the declared pins."""
     patterns = {
         name: re.compile(
-            rf"{re.escape(name)}(?:\[[^\]]*\])?(?:==|@|\s+){re.escape(value)}"
+            rf"{re.escape(name)}(?:\[[^\]]*\])?(?:\s*(?:===|==|>=|<=|~=|!=|>|<|@)\s*|\s+)"
+            rf"(?:{'|'.join(re.escape(value) for value in values)})(?![\w+-]|\.[a-zA-Z0-9])"
         )
-        for name, value in _declared_runtime_pins().items()
+        for name, values in _declared_runtime_pins().items()
     }
     offenders: list[str] = []
     for path in _scanned_files():

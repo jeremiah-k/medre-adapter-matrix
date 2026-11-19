@@ -2,7 +2,8 @@
 
 ## Ownership
 
-The Matrix provider requires Python 3.12+ and the pinned mindroom-nio[e2e] SDK. The SDK
+The Matrix provider requires Python 3.12+ and mindroom-nio[e2e] within the range
+declared in pyproject.toml. The SDK
 MUST own captured responses, crypto mutations, membership projections, gap
 recovery and its upstream cursor. MEDRE MUST own semantic ingress admission and
 its downstream event, routing and delivery records. Native readiness MUST NOT
