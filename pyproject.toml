@@ -1,12 +1,12 @@
 [project]
 name = "medre-adapter-matrix"
-version = "0.1.2"
+version = "0.2.0"
 readme = "README.md"
 description = "matrix transport adapter for MEDRE"
 requires-python = ">=3.12"
 classifiers = ["Typing :: Typed"]
 license = "MIT"
-dependencies = ["medre>=0.1.1,<0.2.0", 'mindroom-nio[e2e]>=1.4.1,<1.5.0']
+dependencies = ["medre>=0.2.0,<0.3.0", 'mindroom-nio[e2e]>=1.4.1,<1.5.0']
 
 [project.optional-dependencies]
 test = ["pytest==9.2.0", "pytest-asyncio==1.5.0", "pytest-timeout==2.4.0", "jsonschema==4.26.0", "packaging==26.3"]
