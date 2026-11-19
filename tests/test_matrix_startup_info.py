@@ -327,11 +327,16 @@ async def test_started_adapter_emits_held_facts_through_core() -> None:
             ]
             assert info.fields[0].value == "@bot:example.com"
             assert info.fields[1].value == "MOCKDEVICE1"
-            assert render_startup_info_block("matrix.matrix-1  ready", info) == (
-                "matrix.matrix-1  ready\n"
-                "  @bot:example.com · device MOCKDEVICE1\n"
-                "  homeserver https://matrix.example.com"
-            )
+            lines = render_startup_info_block(
+                "matrix.matrix-1  ready", info
+            ).splitlines()
+            assert lines[0] == "matrix.matrix-1  ready"
+            # Core owns default labels; providers support both renderer versions.
+            assert lines[1] in {
+                "  @bot:example.com · device MOCKDEVICE1",
+                "  user id @bot:example.com · device MOCKDEVICE1",
+            }
+            assert lines[2:] == ["  homeserver https://matrix.example.com"]
         finally:
             await adapter.stop()
 
