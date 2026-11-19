@@ -12,9 +12,9 @@ def _declared_sdk_requirement() -> str:
     root = Path(__file__).resolve().parent.parent
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     requirements = [
-        dependency.partition("==")[0]
+        match.group(1)
         for dependency in metadata["project"]["dependencies"]
-        if dependency.startswith("mindroom-nio") and "==" in dependency
+        if (match := re.match(r"(mindroom-nio\[[^\]]*\])\s*[<>=!~]", dependency))
     ]
     assert len(requirements) == 1
     return requirements[0]

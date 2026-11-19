@@ -33,11 +33,10 @@ def test_dependency_license_disclosure_references_the_declared_pin():
         if canonicalize_name(dep.name) == "medre":
             continue
         assert dep.name in disclosure, dep
-        pin = next(iter(dep.specifier))
-        assert pin.operator == "=="
         # The disclosure never restates the version: a bump edits pyproject only.
         assert str(dep) not in disclosure, dep
-        assert f"{dep.name}=={pin.version}" not in disclosure, dep
+        for pin in dep.specifier:
+            assert f"{dep.name}{pin}" not in disclosure, dep
 
 
 def test_renovate_does_not_manage_the_license_disclosure():

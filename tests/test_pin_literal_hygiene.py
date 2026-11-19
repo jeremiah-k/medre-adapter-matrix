@@ -16,16 +16,21 @@ SCAN_DIRECTORIES = ("src", "tests", "scripts", "docs", ".github")
 SCAN_ROOT_FILES = ("README.md", "renovate.json", "DEPENDENCY_LICENSES.md")
 
 
-def _declared_runtime_pins() -> dict[str, str]:
+_SPECIFIER_VERSION = re.compile(r"(?:==|>=|<=|~=|!=|>|<)\s*([0-9][^,;\s]*)")
+
+
+def _declared_runtime_pins() -> dict[str, list[str]]:
+    """Declared runtime SDK versions: exact pins or bounded-range endpoints."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
-    pins: dict[str, str] = {}
+    pins: dict[str, list[str]] = {}
     for requirement in project["dependencies"]:
-        if requirement.startswith("medre") or "==" not in requirement:
+        if requirement.startswith("medre"):
             continue
-        name, _, value = requirement.partition("==")
-        pins[name.split("[", 1)[0]] = value
+        versions = _SPECIFIER_VERSION.findall(requirement)
+        if versions:
+            pins[requirement.split("[", 1)[0]] = versions
     assert pins, "runtime SDK pins must be declared"
     return pins
 
@@ -44,9 +49,10 @@ def test_runtime_pin_values_stay_out_of_secondary_files():
     """A version-only dependency bump stays confined to the declared pins."""
     patterns = {
         name: re.compile(
-            rf"{re.escape(name)}(?:\[[^\]]*\])?(?:==|@|\s+){re.escape(value)}"
+            rf"{re.escape(name)}(?:\[[^\]]*\])?(?:==|@|\s+)"
+            rf"(?:{'|'.join(re.escape(value) for value in values)})"
         )
-        for name, value in _declared_runtime_pins().items()
+        for name, values in _declared_runtime_pins().items()
     }
     offenders: list[str] = []
     for path in _scanned_files():
