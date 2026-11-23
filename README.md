@@ -405,12 +405,10 @@ consider authenticated login with --reset-cross-signing; it replaces the account
 identity and requires verification again in other clients. Stop the running
 bridge before using `medre diagnostics --refresh-health`, which opens adapters.
 
-The opt-in `test_matrix_durable_runtime_live.py` proof takes explicit local
-homeserver accounts through environment variables. It runs the real MEDRE
-runtime with durable storage and a fake destination across a restart, and
-fails when native ingress fails. `MATRIX_ENCRYPTED=1` selects genuine Megolm
-traffic; use fresh account/device stores for each independent run. The core
-Synapse Docker starter can provision the isolated accounts.
+The adapter connects to your existing homeserver account and never operates
+one. The opt-in durable-runtime live proof, including its local homeserver
+account setup, is developer testing — see
+[local service testing](docs/dev/local-service-testing.md).
 
 ## Development tooling
 
