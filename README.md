@@ -1,36 +1,67 @@
 # medre-adapter-matrix
 
-**Matrix provider for MEDRE.** This separately installed distribution owns its
-transport SDK, configuration, native codec and offline fake. MEDRE core owns
-routing, storage, lifecycle and delivery evidence.
+The Matrix adapter for MEDRE.
 
 ## Install
 
 Use [uv](https://docs.astral.sh/uv/getting-started/installation/) to install
-MEDRE and this provider in the same persistent tool environment:
+MEDRE and this adapter in the same persistent tool environment:
 
 ```bash
 uv tool install --python 3.12 medre
 medre adapters install matrix
-medre adapters
 ```
 
 Matrix requires Python 3.12+ and includes its durable SQLite/crypto backend.
-The `matrix[e2e]` spelling remains a compatible installation alias.
-The released mindroom-nio store requires POSIX file leases; Windows
-production sessions require a provider release with Windows lease support.
+The `matrix[e2e]` spelling remains a compatible installation alias. The
+released mindroom-nio store requires POSIX file leases; Windows production
+sessions are therefore not supported today.
 
 On Windows, the package-changing command prints a uv command to run **after**
 `medre.exe` exits, rather than replacing an executable still in use.
-Core 0.1.1 and later use package-index defaults for new adapter requests.
-Existing saved Git requests and catalogs are preserved; Git is needed when
-using those sources. For reproducible deployments, pin released versions in
-a locked project or select exact Git revisions. Use the [MEDRE Getting Started guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/getting-started.md)
-for fake smoke, guided route creation and native setup. Use the
-[adapter-source guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/adapter-installation.md)
-for a locked uv deployment project, private Git, local checkouts, index sources,
-and the same-environment requirement. Neither MEDRE nor the provider installs
-packages during runtime startup.
+Adapter installation defaults to package-index requirements; existing saved
+Git requests and catalogs are preserved. For fake smoke, guided route
+creation, locked uv deployment projects, private Git sources, local checkouts,
+and the same-environment requirement, see the
+[MEDRE Getting Started guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/getting-started.md)
+and the
+[adapter-source guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/adapter-installation.md).
+Neither MEDRE nor the adapter installs packages during runtime startup.
+
+## Configure
+
+Save a private `connections.yaml` with an explicit instance and room
+allowlist:
+
+```yaml
+adapters:
+  matrix:
+    bridge:
+      adapter_kind: real
+      encryption_mode: plaintext
+      room_allowlist: ["!abc123:localhost"]
+routes: {}
+```
+
+Supply account settings through MEDRE's environment overrides or the
+credential sidecar; the instance token matches `adapters.matrix.bridge`. Set
+the allowlist to exactly the room(s) you intend to monitor: without it, the
+adapter processes every message from every room the bot has joined. For
+login and E2EE identity setup, room provisioning, all options, and
+troubleshooting, see the
+[Matrix setup guide](https://github.com/jeremiah-k/medre/blob/main/docs/ops/transport-setup/matrix.md).
+
+## Verify
+
+Confirm the installed adapter and the saved configuration resolve:
+
+```bash
+medre adapters check --config connections.yaml
+```
+
+The setup guide's
+[Verify](https://github.com/jeremiah-k/medre/blob/main/docs/ops/transport-setup/matrix.md#verify)
+section shows expected startup output, shutdown output, and health states.
 
 ## Startup readiness
 
@@ -48,6 +79,11 @@ login, joins, and this wait. Allow additional runtime budget for slow services;
 its cancellation still closes the partially started session. See
 [durable sync](docs/spec/durable-sync.md#startup-readiness) for the contract.
 
+Durable sync restores the SDK's persisted membership and encryption projection.
+A fresh store obtains its initial state from the homeserver; existing stores keep
+their device identity and pending batches. See the
+[durable sync contract](docs/spec/durable-sync.md) for adoption and rollback limits.
+
 ## Message presentation
 
 Supported Matrix HTML maps to bounded canonical text spans when its visible text
@@ -56,10 +92,26 @@ attribution outside source styles. Unsupported or inconsistent markup retains
 plain presentation. See the [presentation contract](docs/spec/relay-attribution.md#text-presentation)
 for reply, edit, truncation, and block-boundary behavior.
 
+## Embedded metadata
+
+Matrix event `content.medre` carries versioned canonical provenance and selected
+metadata. `metadata_embedding_mode` is destination-specific: `off` omits the
+MEDRE namespace, `minimal` carries event/actor identity, `safe` adds native
+message references and normalized metadata, and `full` also includes
+transport-native and custom metadata. Full mode exports those details
+deliberately; configuration and SDK objects are never embedded.
+
+Outbound Matrix content carries no legacy `meshtastic_*` fields; the embedded
+MEDRE namespace is the only relay metadata surface, and selecting
+`metadata_embedding_mode: off` yields content without it. Embedded provenance
+is an untrusted relay hint, not delivery evidence or authorization to operate
+on another message. The wire contract is
+[matrix-embedded-metadata.schema.json](docs/schemas/matrix-embedded-metadata.schema.json).
+
 ## Browser-approved Matrix login
 
 For an OAuth-enabled homeserver, authorize MEDRE from your browser instead of
-providing its account password. The provider includes the crypto backend;
+providing its account password. The adapter includes the crypto backend;
 select the adapter whose persistent device store should be prepared:
 
 ```bash
@@ -106,14 +158,6 @@ Logout preserves the crypto store and account-signing sidecar. Back them up
 securely together. Password login remains available on supporting homeservers
 through the existing interactive or `--password-stdin` commands.
 
-## Packaging and provenance
-
-This distribution registers the `medre.adapters` entry point and retains the
-import namespace `medre.adapters.matrix`. Its original adapter source history
-was extracted from MEDRE commit `e59c29dd31a95860d1cdbc19e531896616627a68`;
-Git author and committer identities remain preserved. Runtime configuration and
-adapter discovery do not depend on this repository's distribution name.
-
 ## Restart and offline messages
 
 The SDK persists captured responses, crypto state, recovery and its upstream
@@ -131,164 +175,6 @@ check precedes decode, so messages, reactions, and edits are equally covered,
 and suppressed events count under `inbound_suppressed_stale` in diagnostics.
 The window covers homeserver federation lag and minor clock drift so events
 sent moments before startup still flow.
-
-## Ownership and imports
-
-This distribution owns Matrix's transport implementation, configuration models,
-runtime wrapper, fake adapter, native addressing behavior, SDK requirements,
-and protocol/SDK tests. MEDRE core owns generic events, routing, lifecycle,
-storage, evidence, configuration orchestration, and installed-package discovery.
-
-| Surface         | Adapter-owned import                                       |
-| --------------- | ---------------------------------------------------------- |
-| Config models   | `medre.config.adapters.matrix`                             |
-| Runtime wrapper | `medre.config.adapters.matrix_runtime.MatrixRuntimeConfig` |
-| SDK-free fake   | `medre.adapters.fakes.matrix.FakeMatrixAdapter`            |
-
-Import the runtime wrapper from this distribution directly. Core has no named
-wrapper compatibility bridge or transport SDK extras. The supported MEDRE
-interface range and native SDK pins are declared in this project's
-`pyproject.toml`. Use a compatible released core, or the exact qualified
-core revision for development and native qualification.
-Community adapter authors can use their own distribution names, import packages,
-and hosting sources with the same `medre.adapters` entry-point contract.
-
-MEDRE-authored adapter source is [MIT-licensed](LICENSE). This grant does
-not relicense installed dependencies. Their license terms still apply to any
-combined deployment or redistribution. See [dependency license notes](DEPENDENCY_LICENSES.md).
-
-## Offline samples and diagnostics
-
-This distribution contributes native fake values and an opaque conversation
-address to `medre config sample`. Core includes only installed contributors;
-a single contributor gets two fake instances for offline routing. Native
-packet simulation methods remain adapter-specific. Run-session canonical
-callback injection uses `AdapterContract.publish_inbound(event)`.
-
-`medre adapters check --config bridge.yaml` distinguishes missing distributions
-from broken/conflicting entry points. Basic CLI help and unrelated healthy
-providers remain available when another provider fails discovery.
-
-Matrix configures the core-owned `medre adapter matrix` parser. Optional CLI
-registration failures are reported as `broken CLI contribution` without
-disabling generic help, preflight, healthy commands, or runtime discovery.
-
-Durable sync restores the SDK's persisted membership and encryption projection.
-A fresh store obtains its initial state from the homeserver; existing stores keep
-their device identity and pending batches. See the
-[durable sync contract](docs/spec/durable-sync.md) for adoption and rollback limits.
-
-Stopped-state maintenance derives this adapter's capture inventory from a
-provider-owned declaration shipped in this distribution; the durable store and
-token sidecar are declared honestly rather than guessed. See the
-[stopped-state declaration contract](docs/spec/stopped-state.md).
-
-Matrix event `content.medre` carries versioned canonical provenance and selected
-metadata. `metadata_embedding_mode` is destination-specific: `off` omits the
-MEDRE namespace, `minimal` carries event/actor identity, `safe` adds native
-message references and normalized metadata, and `full` also includes provider
-native and custom metadata. Full mode exports those details deliberately;
-configuration and SDK objects are never embedded.
-
-Outbound Matrix content carries no legacy `meshtastic_*` fields; the embedded
-MEDRE namespace is the only relay metadata surface, and selecting
-`metadata_embedding_mode: off` yields content without it. Embedded provenance
-is an untrusted relay hint, not delivery evidence or authorization to operate
-on another message. The wire contract is
-[matrix-embedded-metadata.schema.json](docs/schemas/matrix-embedded-metadata.schema.json).
-
-## Tests
-
-Protocol and SDK contract tests live in this repository with adapter-owned
-helpers. Cross-adapter routing and lifecycle tests remain in MEDRE. Run the
-tests through the locked uv core environment described in
-[contributing](CONTRIBUTING.md). That workflow supports arbitrary core and
-provider checkouts, including forks, without a separate manually configured
-virtual environment. Select SDK, service, hardware, local integration and soak
-tiers explicitly. Re-run the SDK-free sync before claiming an SDK-free proof.
-
-## Fake smoke sources
-
-The fake provides a synchronous `make_event(text=..., event_kind=...)` returning
-a canonical event with its own adapter instance ID. After installing all
-providers referenced by a fake bridge config, exercise a source with:
-
-```bash
-medre smoke --config bridge.yaml --source-adapter ADAPTER_ID --json
-```
-
-Use the configured instance ID, which may differ from the transport name. Each
-normal smoke tests one source; inspect `source_candidates` and
-`coverage_scope: single_source` in its report. Eligible sources must have started
-and provide the helper. A pass requires delivery for every matched configured
-route target, including targets unavailable after construction or startup.
-Factory errors fail the smoke and trigger runtime cleanup. The result proves
-fake direct-pipeline behavior; native callbacks and recipient delivery have
-separate qualification tiers.
-
-## Coordinated CI
-
-The repository CI installs MEDRE core and this adapter. Its fake job omits
-native SDK dependencies; its SDK job installs this distribution's declared pins.
-CI resolves MEDRE `main` once per run by default. Keep the repository Actions variable
-`MEDRE_CORE_REF` unset so pull-request checks retain that baseline. Qualify a
-candidate pair with a one-run dispatch and a full core commit SHA:
-
-```bash
-gh workflow run test.yml --ref ADAPTER_BRANCH -f core_ref=FULL_CORE_COMMIT_SHA
-gh workflow run test.yml --ref ADAPTER_BRANCH -f core_ref=FULL_CORE_COMMIT_SHA -f sdk_ref=FULL_SDK_COMMIT_SHA
-```
-
-Record both revisions with the result. The candidate run does not replace the
-adapter PR's checks against core `main`. Follow the
-[coordinated-change policy](https://github.com/jeremiah-k/medre/blob/main/docs/dev/coordinated-changes.md)
-for dependency order and merged compatibility pins.
-
-A manual `sdk_ref` selects a full commit from `jeremiah-k/mindroom-nio` for
-installed-SDK jobs. The candidate is installed within the locked core constraints;
-its package version must satisfy the adapter's declared dependency. CI checks
-package consistency and installed-source provenance, and records the exact SDK
-commit. Default jobs retain the released SDK pin. Candidate-source runs qualify
-an experiment; they do not change deployment dependencies or compatibility pins.
-
-Core's compatibility matrix tests each selected adapter at the exact commit
-recorded in its manifest, along with cross-adapter behavior. In a coordinated
-checkout containing the selected sibling repos, run from MEDRE:
-
-```bash
-python scripts/ci/adapter_matrix.py --check-local
-# Once all adapter changes are committed:
-python scripts/ci/adapter_matrix.py --sync-local
-```
-
-The helper validates clean sibling checkouts and their entry points, and compares
-Python distribution names using normalized case/separator spelling. Synchronizing
-updates the manifest atomically without fetching or installing packages. Review
-the manifest diff, merge adapter commits into their default branches first, then publish
-the core pin update and run `python scripts/ci/adapter_matrix.py --check-merged`. A failed write preserves the original manifest and cleans up the temporary
-file. Deployment projects should separately lock their chosen complete
-package graph.
-
-Standalone CI records the exact core and adapter SHAs tested against its
-configured core baseline. MEDRE core CI qualifies the pinned compatibility
-pair; a standalone green result does not qualify another core revision.
-SDK qualification extras come from the selected core compatibility manifest,
-while SDK versions remain authoritative in this adapter's package metadata.
-
-## Provider contract and quality
-
-The [registration reference](https://github.com/jeremiah-k/medre/blob/main/docs/dev/adapter-registration.md)
-documents every hook, its loading phase, and the minimal fake constructor/event
-calls. Shared native-metadata helpers are public under `medre.adapters.metadata`.
-Conformance tests use `medre.testing`; SDK pin checks read this distribution's
-installed metadata while this repository chooses its SDK qualification extras.
-The fake constructor and explicit-keyword event factory are checked in the
-SDK-free tier. Native schemas and validated examples live in `docs/schemas` here.
-
-Python policy is declared in pyproject.toml. Local work and CI use the same
-committed Trunk launcher and pinned tools for all-file checks, alongside the
-fake/native qualification tiers.
-The native adapter package includes its own `py.typed` marker.
 
 ## Default relay attribution
 
@@ -331,10 +217,8 @@ local device store counts as a trust gap. The default does not inspect that
 store. The adapter's own current device is handled by cross-signing, not
 peer-device authorization.
 
-Default policy note: `permissive` is the default for compatibility, and
-`strict` is NOT scheduled to become the default until a separate,
-independently qualified peer-verification workflow exists. Flipping that
-default is a deliberate, separately reviewed change; do not rely on the
+Default policy note: `permissive` is the default for compatibility. Flipping
+that default is a deliberate, separately reviewed change; do not rely on the
 current default for assurance.
 
 Neither mode proves delivery. A refused send is never delivered, but an
@@ -360,7 +244,7 @@ defines native scope and live-sync behavior.
 
 ## Encryption readiness
 
-Install the Matrix provider with its declared dependencies. The durable SDK
+Install the Matrix adapter with its declared dependencies. The durable SDK
 requires its SQLite crypto backend even with encryption_mode: plaintext;
 plaintext policy continues refusing encrypted-room delivery. Missing backend
 dependencies fail production startup instead of silently selecting ordinary sync.
@@ -410,7 +294,10 @@ one. The opt-in durable-runtime live proof, including its local homeserver
 account setup, is developer testing — see
 [local service testing](docs/dev/local-service-testing.md).
 
-## Development tooling
+## Development
 
-See [contributing](CONTRIBUTING.md) for the shared Trunk quality gate and uv-based
-editable development workflow.
+See [contributing](CONTRIBUTING.md) for the shared Trunk quality gate and
+uv-based editable development workflow. Maintainer material — packaging and
+provenance, ownership and imports, offline samples and diagnostics, tests,
+fake smoke sources, coordinated CI, and the adapter contract — lives in
+[adapter maintenance](docs/dev/adapter-maintenance.md).
