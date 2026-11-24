@@ -312,16 +312,46 @@ relay each other's messages back until the mesh and the room flood.
 
 On the MEDRE side, set the shared room in `room_allowlist` and keep the room
 encrypted, as the [Configure](#configure) example already shows. This adapter
-has no peer-relay trust list: it processes the authored text of every
-allowlisted room message and stores embedded provenance as an untrusted
-claim. The trust decision lives on the MMRelay side — its operator lists
-this bot's Matrix user ID under `matrix.trusted_relays`, and MMRelay's
+processes the authored text of every allowlisted room message and stores
+embedded provenance as an untrusted claim. The trust decision lives on the
+MMRelay side — its operator lists this bot's Matrix user ID under
+`matrix.trusted_relays`, and MMRelay's
 [shared-rooms guide](https://github.com/jeremiah-k/meshtastic-matrix-relay/blob/main/docs/SHARED_ROOMS.md)
 documents the drops and warnings that decision produces. The MEDRE
 walkthrough — verification in both directions, what MEDRE ignores, privacy
 notes, and limitations — is
 [sharing a room with MMRelay](https://github.com/jeremiah-k/medre/blob/main/docs/ops/shared-rooms-with-mmrelay.md)
 in the core docs.
+
+### Trusted peer relays
+
+The adapter trusts no other relays or bridges by default. Any allowlisted
+message that carries the MEDRE envelope under `content.medre` is dropped
+unless its sender is listed in `trusted_relays`; ordinary Matrix messages
+without the envelope are never gated. Add the exact Matrix user ID of the
+peer relay — starting with `@`, containing `:`, no wildcards — and its
+envelopes pass the gate:
+
+```yaml
+adapters:
+  matrix:
+    bridge:
+      adapter_kind: real
+      room_allowlist: ["!abc123:localhost"]
+      trusted_relays: ["@mmrelay-bot:example.org"]
+```
+
+A listed relay's malformed or unsupported envelope is also dropped, with a
+separate counter and a warning to check the peer relay's version. Drops are
+counted and rate-limited warnings name the sender, room, and event; claim
+contents are never logged. Listing a relay only admits its envelopes — an
+embedded claim never grants authority, and `medre diagnostics` reports the
+configured relay count, never the IDs. See the
+[peer-relay contract](docs/spec/peer-relays.md) for the rules.
+
+A shared room keeps the default `metadata_embedding_mode: safe`: the
+`minimal` mode omits the relay context MMRelay requires from a peer claim,
+so MMRelay refuses envelopes produced in that mode.
 
 ### Migrating a Matrix account from MMRelay
 
