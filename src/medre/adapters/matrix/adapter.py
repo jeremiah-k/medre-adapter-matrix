@@ -71,11 +71,16 @@ from medre.adapters.matrix.errors import (
 from medre.adapters.matrix.event_shape import (
     MATRIX_NATIVE_SCHEMA_VERSION,
     attachment_candidate_from_matrix_media,
+    matrix_relay_metadata,
 )
 from medre.adapters.matrix.metadata import MatrixMetadataEnvelope
 from medre.adapters.matrix.outbound import (
     MatrixOutboundEnvelopeError,
     MatrixOutboundOperation,
+)
+from medre.adapters.matrix.peer_relay import (
+    PeerRelayWarningLimiter,
+    carries_medre_content,
 )
 from medre.adapters.matrix.relations import MatrixRelationHandler
 from medre.adapters.matrix.session import MatrixSession
@@ -280,6 +285,8 @@ class MatrixAdapter(AdapterContract):
         "_codec",
         "_relation_handler",
         "_envelope_handler",
+        "_trusted_relays",
+        "_relay_claim_warnings",
         "_started",
         "_starting",
         "_adapter_start_epoch",
@@ -301,6 +308,9 @@ class MatrixAdapter(AdapterContract):
         "_inbound_filtered_encryption_policy",
         "_inbound_suppressed_startup",
         "_inbound_suppressed_stale",
+        # Peer-relay trust gate counters
+        "_inbound_filtered_untrusted_relay",
+        "_inbound_filtered_invalid_relay_envelope",
         # Attachment transfer diagnostics
         "_inbound_attachment_retained",
         "_inbound_attachment_unavailable",
@@ -332,6 +342,10 @@ class MatrixAdapter(AdapterContract):
         self._codec = MatrixCodec(config.adapter_id, config)
         self._relation_handler = MatrixRelationHandler()
         self._envelope_handler = MatrixMetadataEnvelope
+        # Peer-relay trust gate: exact validated user IDs, and the bounded
+        # warning throttle keyed by (sender, reason).
+        self._trusted_relays = frozenset(config.trusted_relays)
+        self._relay_claim_warnings = PeerRelayWarningLimiter()
         self._started: bool = False
         self._starting: bool = False
         self._adapter_start_epoch: float | None = None
@@ -353,6 +367,9 @@ class MatrixAdapter(AdapterContract):
         self._inbound_filtered_encryption_policy: int = 0
         self._inbound_suppressed_startup: int = 0
         self._inbound_suppressed_stale: int = 0
+        # Peer-relay trust gate counters
+        self._inbound_filtered_untrusted_relay: int = 0
+        self._inbound_filtered_invalid_relay_envelope: int = 0
         # Attachment transfer diagnostics
         self._inbound_attachment_retained: int = 0
         self._inbound_attachment_unavailable: int = 0
@@ -420,6 +437,10 @@ class MatrixAdapter(AdapterContract):
         self._inbound_filtered_encryption_policy = 0
         self._inbound_suppressed_startup = 0
         self._inbound_suppressed_stale = 0
+        # Peer-relay trust gate counters — reset on start
+        self._inbound_filtered_untrusted_relay = 0
+        self._inbound_filtered_invalid_relay_envelope = 0
+        self._relay_claim_warnings = PeerRelayWarningLimiter()
         # Attachment transfer diagnostics — reset on start
         self._inbound_attachment_retained = 0
         self._inbound_attachment_unavailable = 0
@@ -1495,9 +1516,19 @@ class MatrixAdapter(AdapterContract):
         into a canonical event and publishes it into the framework's
         inbound stream.  Self-messages (where the sender matches
         ``config.user_id``) are suppressed to prevent echo loops.
-        Events carrying a MEDRE metadata envelope whose
-        ``source_adapter`` equals this adapter's ID are also suppressed
-        as loop-origin hints.
+
+        The peer-relay trust gate runs after self-message suppression
+        and before decode: a message carrying the reserved ``medre``
+        content namespace is admitted only when its wire sender is
+        listed in ``config.trusted_relays``.  An unlisted sender's
+        envelope-carrying message is dropped and counted; a listed
+        sender's malformed, unsupported, or incoherent envelope is
+        dropped and counted under a separate reason.  Messages without
+        the namespace are never gated.  Among admitted envelopes, one
+        whose ``source_adapter`` equals this adapter's ID is suppressed
+        as a loop-origin hint, and only from this adapter's own account
+        or a listed peer — a forged hint from an unlisted sender cannot
+        cause a silent drop.
 
         Parameters
         ----------
@@ -1612,6 +1643,75 @@ class MatrixAdapter(AdapterContract):
                 sender,
             )
             return
+
+        # Peer-relay trust gate: this adapter trusts no other relays or
+        # bridges unless they are listed in trusted_relays.  Detection is a
+        # raw content-namespace membership test placed BEFORE decode, so a
+        # malformed or unsupported envelope can never pass through as
+        # ordinary text.  Ordinary Matrix messages without the namespace are
+        # never gated, in any configuration.  A plain return, never a raise,
+        # so the SDK consumes the event and the durable sync checkpoint
+        # keeps advancing.
+        content = (event.get("source") or {}).get("content")
+        if carries_medre_content(content):
+            event_id = str(event.get("event_id", "") or "")
+            if sender not in self._trusted_relays:
+                self._inbound_filtered_untrusted_relay += 1
+                if self._relay_claim_warnings.should_warn(
+                    sender, "untrusted", self._clock()
+                ):
+                    self.ctx.logger.warning(
+                        "MatrixAdapter %s: dropped MEDRE envelope from untrusted "
+                        "sender %s in room %s (event %s); claimed provenance is "
+                        "not authenticated. Add the exact Matrix user ID %s to "
+                        "trusted_relays to accept relay traffic from this peer",
+                        self.adapter_id,
+                        sender,
+                        room_id,
+                        event_id,
+                        sender,
+                    )
+                else:
+                    self.ctx.logger.debug(
+                        "MatrixAdapter %s: dropped repeated untrusted MEDRE "
+                        "envelope from sender %s in room %s (event %s)",
+                        self.adapter_id,
+                        sender,
+                        room_id,
+                        event_id,
+                    )
+                return
+            try:
+                coherent = matrix_relay_metadata(content) is not None
+            except Exception:
+                # Hostile wire content must fail closed into the drop path,
+                # never break the sync callback; exception text can contain
+                # attacker-supplied data and is never logged.
+                coherent = False
+            if not coherent:
+                self._inbound_filtered_invalid_relay_envelope += 1
+                if self._relay_claim_warnings.should_warn(
+                    sender, "invalid", self._clock()
+                ):
+                    self.ctx.logger.warning(
+                        "MatrixAdapter %s: dropped malformed or unsupported "
+                        "MEDRE envelope from trusted sender %s in room %s "
+                        "(event %s); check the peer relay's version",
+                        self.adapter_id,
+                        sender,
+                        room_id,
+                        event_id,
+                    )
+                else:
+                    self.ctx.logger.debug(
+                        "MatrixAdapter %s: dropped repeated invalid MEDRE "
+                        "envelope from sender %s in room %s (event %s)",
+                        self.adapter_id,
+                        sender,
+                        room_id,
+                        event_id,
+                    )
+                return
 
         try:
             canonical = self._codec.decode(event, room_id=room_id)
@@ -2011,6 +2111,14 @@ class MatrixAdapter(AdapterContract):
                 ),
                 "inbound_suppressed_startup": self._inbound_suppressed_startup,
                 "inbound_suppressed_stale": self._inbound_suppressed_stale,
+                # Peer-relay trust gate (counts only; never relay IDs)
+                "trusted_relay_count": len(self._config.trusted_relays),
+                "inbound_filtered_untrusted_relay": (
+                    self._inbound_filtered_untrusted_relay
+                ),
+                "inbound_filtered_invalid_relay_envelope": (
+                    self._inbound_filtered_invalid_relay_envelope
+                ),
                 # Attachment transfer diagnostics
                 "inbound_attachment_retained": self._inbound_attachment_retained,
                 "inbound_attachment_unavailable": (
@@ -2101,6 +2209,14 @@ class MatrixAdapter(AdapterContract):
             ),
             "inbound_suppressed_startup": self._inbound_suppressed_startup,
             "inbound_suppressed_stale": self._inbound_suppressed_stale,
+            # Peer-relay trust gate (counts only; never relay IDs)
+            "trusted_relay_count": len(self._config.trusted_relays),
+            "inbound_filtered_untrusted_relay": (
+                self._inbound_filtered_untrusted_relay
+            ),
+            "inbound_filtered_invalid_relay_envelope": (
+                self._inbound_filtered_invalid_relay_envelope
+            ),
             # Attachment transfer diagnostics
             "inbound_attachment_retained": self._inbound_attachment_retained,
             "inbound_attachment_unavailable": self._inbound_attachment_unavailable,
