@@ -186,7 +186,9 @@ sent moments before startup still flow.
 Matrix output defaults to `[sender/origin]: message`, preserving the full sender
 name. An absent origin renders `[sender]: message`. Set `relay_prefix: ""` to
 disable attribution or supply a custom generic template. Omitted/null selects
-the automatic policy; MMRelay wire metadata keeps the original unprefixed text.
+the automatic policy. Attribution applies only to the text this adapter sends;
+a received message's authored body — including any prefix the originating relay
+added — is never rewritten.
 
 ## Device verification
 
