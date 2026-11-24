@@ -38,10 +38,15 @@ adapters:
   matrix:
     bridge:
       adapter_kind: real
-      encryption_mode: plaintext
+      encryption_mode: e2ee_required
       room_allowlist: ["!abc123:localhost"]
 routes: {}
 ```
+
+New private rooms and direct messages in Element are encrypted by default, so
+the example uses `e2ee_required`; `plaintext` is the option for an unencrypted
+room, and `e2ee_optional` falls back to plaintext when the crypto library does
+not load. In an encrypted room, `plaintext` cannot decrypt any message.
 
 Supply account settings through MEDRE's environment overrides or the
 credential sidecar; the instance token matches `adapters.matrix.bridge`. Set
