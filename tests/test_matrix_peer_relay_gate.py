@@ -285,6 +285,56 @@ class TestPeerRelayTrustGate:
         assert len(published) == 0
         assert adapter._inbound_suppressed_self == 1
         assert adapter._inbound_filtered_untrusted_relay == 0
+        assert adapter._inbound_suppressed_envelope == 0
+
+
+# ===================================================================
+# Echo-hint scoping
+# ===================================================================
+
+
+class TestEchoHintScope:
+    """No unauthenticated claim can cause a silent drop."""
+
+    async def test_forged_own_adapter_envelope_from_untrusted_sender(self) -> None:
+        """An unlisted sender forging this adapter's ID is gate-dropped,
+        never silently suppressed by the loop hint."""
+        forged = MatrixMetadataEnvelope(
+            source_adapter="matrix-gate",
+            canonical_event_id=_CLAIM_MARKER,
+        )
+        content = {
+            "msgtype": "m.text",
+            "body": "forged loop hint",
+            **forged.to_content(),
+        }
+        adapter, published, _ = _make_gate_adapter(trusted_relays=())
+        await _deliver(adapter, _OTHER, content)
+
+        assert len(published) == 0
+        assert adapter._inbound_filtered_untrusted_relay == 1
+        assert adapter._inbound_suppressed_envelope == 0
+
+    async def test_forged_hint_from_listed_peer_still_suppressed(self) -> None:
+        """A listed peer echoing this adapter's own envelope is suppressed
+        as a loop hint — the legitimate echo case."""
+        forged = MatrixMetadataEnvelope(
+            source_adapter="matrix-gate",
+            canonical_event_id=_CLAIM_MARKER,
+        )
+        content = {
+            "msgtype": "m.text",
+            "body": "relayed loop hint",
+            **forged.to_content(),
+        }
+        adapter, published, _ = _make_gate_adapter(
+            trusted_relays=(_RELAY,),
+        )
+        await _deliver(adapter, _RELAY, content)
+
+        assert len(published) == 0
+        assert adapter._inbound_suppressed_envelope == 1
+        assert adapter._inbound_filtered_untrusted_relay == 0
 
 
 # ===================================================================

@@ -1718,11 +1718,19 @@ class MatrixAdapter(AdapterContract):
 
             # MEDRE-origin loop hint suppression: if the event carries a
             # MEDRE envelope whose source_adapter matches this adapter,
-            # skip publishing to prevent echo loops.  Missing or corrupt
-            # envelopes are tolerated (accepted normally).
+            # skip publishing to prevent echo loops.  The hint is only an
+            # unauthenticated claim, so it suppresses solely when the wire
+            # sender is this adapter's own account or a listed trusted
+            # peer — a forged hint from an unlisted sender cannot cause a
+            # silent drop (the gate has already dropped that sender's
+            # envelope-carrying message before decode).
             content = (event.get("source") or {}).get("content", {})
             envelope = self._envelope_handler.from_content(content)
-            if envelope is not None and envelope.source_adapter == self.adapter_id:
+            if (
+                envelope is not None
+                and envelope.source_adapter == self.adapter_id
+                and (sender == self._config.user_id or sender in self._trusted_relays)
+            ):
                 self._inbound_suppressed_envelope += 1
                 self.ctx.logger.debug(
                     "MatrixAdapter %s: suppressing MEDRE-origin event "
@@ -2008,7 +2016,12 @@ class MatrixAdapter(AdapterContract):
 
         Includes session diagnostics plus adapter-level fields.
         No access tokens, room keys, session IDs, user secrets,
-        or room-name dumps.
+        or room-name dumps.  ``trusted_relay_count`` reports only how
+        many peer relays are configured, never their user IDs.
+        ``inbound_suppressed_envelope`` counts own-adapter envelopes
+        suppressed from this adapter's own account or a listed peer —
+        a forged hint from an unlisted sender never reaches this
+        counter, because the trust gate drops that sender first.
         """
         if self._session is not None:
             diag = self._session.diagnostics()
