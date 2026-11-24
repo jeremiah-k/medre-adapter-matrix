@@ -271,14 +271,14 @@ absent. SDK/path inspection failures require diagnosis before assuming keys are
 missing.
 
 If the signing file is missing, stop the bridge and locate an existing SDK
-account-signing JSON for the same Matrix account (for example in an MMRelay
-store or a backup). Do not copy tokens or device databases between applications.
-Validate and import that backup using the existing MEDRE credentials:
+account-signing JSON for the same Matrix account in another store or a backup.
+Do not copy tokens or device databases between applications. Validate and
+import that backup using the existing MEDRE credentials:
 
 ```bash
 medre adapter matrix auth restore-signing --adapter-id matrix \
   --config ~/medre/bridge.yaml \
-  --from ~/.mmrelay/matrix/store/@bot:example.com_cross_signing.json
+  --from /path/to/account-signing-backup.json
 ```
 
 The command verifies the token's account/device and matches the backup's keys
@@ -289,6 +289,8 @@ filesystem error can leave the complete file present: inspect status before
 retrying. Restart the bridge to sign its own device using the restored keys.
 A readable local file alone does not prove server/device verification. Import
 restores account-signing keys, not historical encrypted-room message keys.
+Migrating an account from an MMRelay installation is covered in
+[Sharing a room with MMRelay](#sharing-a-room-with-mmrelay).
 
 Ordinary login preserves account signing keys and cannot reconstruct missing
 private material. Only when no matching backup exists should an operator
@@ -300,6 +302,39 @@ The adapter connects to your existing homeserver account and never operates
 one. The opt-in durable-runtime live proof, including its local homeserver
 account setup, is developer testing — see
 [local service testing](docs/dev/local-service-testing.md).
+
+## Sharing a room with MMRelay
+
+[MMRelay](https://github.com/jeremiah-k/meshtastic-matrix-relay) can bridge
+its Meshtastic mesh into the same room this adapter serves. Keep one relay
+per radio mesh: two relays attached to the same mesh while sharing a room
+relay each other's messages back until the mesh and the room flood.
+
+On the MEDRE side, set the shared room in `room_allowlist` and keep the room
+encrypted, as the [Configure](#configure) example already shows. This adapter
+has no peer-relay trust list: it processes the authored text of every
+allowlisted room message and stores embedded provenance as an untrusted
+claim. The trust decision lives on the MMRelay side — its operator lists
+this bot's Matrix user ID under `matrix.trusted_relays`, and MMRelay's
+[shared-rooms guide](https://github.com/jeremiah-k/meshtastic-matrix-relay/blob/main/docs/SHARED_ROOMS.md)
+documents the drops and warnings that decision produces. The MEDRE
+walkthrough — verification in both directions, what MEDRE ignores, privacy
+notes, and limitations — is
+[sharing a room with MMRelay](https://github.com/jeremiah-k/medre/blob/main/docs/ops/shared-rooms-with-mmrelay.md)
+in the core docs.
+
+### Migrating a Matrix account from MMRelay
+
+MMRelay and this adapter use the same Matrix SDK store layout, so an account
+that already ran in MMRelay can keep its signing identity. Stop the bridge,
+locate the account-signing JSON for the same Matrix account in the MMRelay
+store — named after the account with a `_cross_signing.json` suffix, such as
+`~/.mmrelay/matrix/store/@bot:example.org_cross_signing.json` — and import it
+with the `restore-signing` command from
+[Encryption readiness](#encryption-readiness). The import verifies the saved
+token's account and device, refuses to replace an existing signing file, and
+restores account-signing keys only, never historical encrypted-room message
+keys.
 
 ## Development
 
