@@ -63,6 +63,16 @@ class MatrixConfig:
     room_allowlist:
         Optional set of room IDs to accept messages from.  ``None``
         means all rooms are accepted.
+    trusted_relays:
+        Exact Matrix user IDs of peer relays and bridges whose messages
+        may carry the reserved MEDRE envelope (``content.medre``).
+        The empty tuple (default) trusts no peer: any allowlisted
+        message carrying the envelope is dropped when its sender is
+        not listed.  Entries must start with ``"@"``, contain
+        ``":"``, and contain no whitespace or ``"*"``; membership is
+        exact string equality with the wire sender (no case folding,
+        no wildcards).  Listing a relay grants it passage through the
+        gate only — an embedded claim never gains authority.
     metadata_embedding_mode:
         How metadata is embedded in messages.  Defaults to ``"safe"``.
     store_path:
@@ -119,6 +129,7 @@ class MatrixConfig:
     device_id: str | None = None
     access_token: str = ""
     room_allowlist: set[str] | None = None
+    trusted_relays: tuple[str, ...] = ()
     metadata_embedding_mode: MetadataEmbeddingMode = "safe"
     store_path: str | None = None
     sync_timeout_ms: int = 30000
@@ -232,6 +243,30 @@ class MatrixConfig:
                     raise MatrixConfigError(
                         "room_allowlist entries must be non-empty strings"
                     )
+
+        # Validate trusted_relays entries: exact Matrix user IDs, matched
+        # against the wire sender with no case folding or wildcards.
+        if not isinstance(self.trusted_relays, tuple):
+            raise MatrixConfigError("trusted_relays must be a tuple")
+        seen_relays: set[str] = set()
+        for entry in self.trusted_relays:
+            if (
+                not isinstance(entry, str)
+                or not entry.startswith("@")
+                or ":" not in entry
+                or any(character.isspace() for character in entry)
+                or "*" in entry
+            ):
+                raise MatrixConfigError(
+                    "trusted_relays entries must be exact Matrix user IDs "
+                    "(starting with '@', containing ':', without whitespace "
+                    f"or '*'), got {entry!r}"
+                )
+            if entry in seen_relays:
+                raise MatrixConfigError(
+                    f"trusted_relays entries must be unique, got {entry!r} twice"
+                )
+            seen_relays.add(entry)
 
         # Validate auto_join_rooms entries.
         if not isinstance(self.auto_join_rooms, tuple):

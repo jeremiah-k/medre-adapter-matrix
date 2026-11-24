@@ -415,8 +415,11 @@ class TestMEDREOriginLoopSuppression:
         assert len(published) == 0
 
     async def test_medre_envelope_different_adapter_accepted(self) -> None:
-        """Events with MEDRE envelope from a different adapter are accepted."""
-        config = _make_matrix_config(adapter_id="matrix-1")
+        """A trusted peer's MEDRE envelope naming another adapter is accepted."""
+        config = _make_matrix_config(
+            adapter_id="matrix-1",
+            trusted_relays=("@alice:example.com",),
+        )
         adapter = MatrixAdapter(config)
         published, ctx = _make_adapter_context()
         adapter.ctx = ctx
@@ -457,9 +460,13 @@ class TestMEDREOriginLoopSuppression:
         await adapter._on_room_message(_to_event_dict(room, event))
         assert len(published) == 1
 
-    async def test_corrupt_envelope_accepted(self) -> None:
-        """Events with a corrupt MEDRE envelope are accepted (tolerant)."""
-        config = _make_matrix_config(adapter_id="matrix-1")
+    async def test_corrupt_envelope_from_trusted_sender_dropped(self) -> None:
+        """A trusted sender's corrupt MEDRE envelope is dropped, never
+        downgraded to an ordinary message."""
+        config = _make_matrix_config(
+            adapter_id="matrix-1",
+            trusted_relays=("@alice:example.com",),
+        )
         adapter = MatrixAdapter(config)
         published, ctx = _make_adapter_context()
         adapter.ctx = ctx
@@ -477,7 +484,8 @@ class TestMEDREOriginLoopSuppression:
         room = _make_fake_room()
 
         await adapter._on_room_message(_to_event_dict(room, event))
-        assert len(published) == 1
+        assert len(published) == 0
+        assert adapter._inbound_filtered_invalid_relay_envelope == 1
 
 
 # ===================================================================
@@ -774,7 +782,10 @@ class TestInboundDiagnosticsCounters:
 
     async def test_envelope_suppression_counter_increments(self) -> None:
         """_inbound_suppressed_envelope increments for MEDRE-origin echoes."""
-        config = _make_matrix_config(adapter_id="matrix-1")
+        config = _make_matrix_config(
+            adapter_id="matrix-1",
+            trusted_relays=("@alice:example.com",),
+        )
         adapter = MatrixAdapter(config)
         published, ctx = _make_adapter_context()
         adapter.ctx = ctx
@@ -968,7 +979,10 @@ class TestReactionEventHandling:
 
     async def test_medre_origin_reaction_suppressed(self) -> None:
         """MEDRE-origin reaction events from the same adapter are suppressed."""
-        config = _make_matrix_config(adapter_id="matrix-1")
+        config = _make_matrix_config(
+            adapter_id="matrix-1",
+            trusted_relays=("@alice:example.com",),
+        )
         adapter = MatrixAdapter(config)
         published, ctx = _make_adapter_context()
         adapter.ctx = ctx
