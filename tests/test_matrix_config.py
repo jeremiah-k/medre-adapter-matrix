@@ -446,6 +446,101 @@ def test_auto_join_bare_sigil_rejected() -> None:
 
 
 # ===================================================================
+# trusted_relays field
+# ===================================================================
+
+
+class TestMatrixConfigTrustedRelays:
+    """trusted_relays field defaults, validation, and uniqueness."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sidecar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Prevent sidecar credential file from interfering with validation tests."""
+        monkeypatch.setattr(
+            "medre.config.adapters.matrix_credentials.load_credentials_json",
+            lambda: None,
+        )
+
+    def _config(self, **overrides: object) -> MatrixConfig:
+        values: dict[str, object] = {
+            "adapter_id": "matrix-1",
+            "homeserver": "https://matrix.example.com",
+            "user_id": "@bot:example.com",
+            "access_token": "s3cret",
+        }
+        values.update(overrides)
+        return MatrixConfig(**values)  # type: ignore[arg-type]
+
+    def test_default_trusts_no_relays(self) -> None:
+        """Default trusted_relays is an empty tuple."""
+        config = self._config()
+        assert config.trusted_relays == ()
+        config.validate()
+
+    def test_valid_entries_accepted(self) -> None:
+        """Exact Matrix user IDs are accepted and preserved in order."""
+        config = self._config(
+            trusted_relays=("@relay:example.org", "@bridge:example.com"),
+        )
+        result = config.validate()
+        assert result.trusted_relays == ("@relay:example.org", "@bridge:example.com")
+
+    def test_missing_sigil_rejected(self) -> None:
+        """An entry not starting with '@' is rejected, naming the entry."""
+        config = self._config(trusted_relays=("relay:example.org",))
+        with pytest.raises(MatrixConfigError, match="relay:example.org"):
+            config.validate()
+
+    def test_missing_colon_rejected(self) -> None:
+        """An entry without a ':' is rejected, naming the entry."""
+        config = self._config(trusted_relays=("@relay",))
+        with pytest.raises(MatrixConfigError, match="@relay"):
+            config.validate()
+
+    def test_whitespace_rejected(self) -> None:
+        """An entry containing whitespace is rejected, naming the entry."""
+        config = self._config(trusted_relays=("@relay bot:example.org",))
+        with pytest.raises(MatrixConfigError, match="@relay bot:example.org"):
+            config.validate()
+
+    def test_wildcard_rejected(self) -> None:
+        """An entry containing '*' is rejected; wildcards never match."""
+        config = self._config(trusted_relays=("@*:example.org",))
+        with pytest.raises(MatrixConfigError, match=r"@\*:example\.org"):
+            config.validate()
+
+    def test_non_string_rejected(self) -> None:
+        """A non-string entry is rejected."""
+        config = self._config(trusted_relays=(42,))
+        with pytest.raises(MatrixConfigError, match="trusted_relays"):
+            config.validate()
+
+    def test_non_tuple_rejected(self) -> None:
+        """A non-tuple trusted_relays value is rejected."""
+        config = self._config(trusted_relays=["@relay:example.org"])
+        with pytest.raises(MatrixConfigError, match="trusted_relays must be a tuple"):
+            config.validate()
+
+    def test_duplicate_rejected(self) -> None:
+        """A duplicated entry is rejected: the trust list stays unambiguous."""
+        config = self._config(
+            trusted_relays=("@relay:example.org", "@relay:example.org"),
+        )
+        with pytest.raises(MatrixConfigError, match="@relay:example.org"):
+            config.validate()
+
+    def test_listing_a_relay_does_not_touch_the_allowlist(self) -> None:
+        """trusted_relays and room_allowlist are independent settings."""
+        config = self._config(
+            room_allowlist={"!room:example.org"},
+            trusted_relays=("@relay:example.org",),
+        )
+        result = config.validate()
+        assert result.room_allowlist == {"!room:example.org"}
+        assert result.trusted_relays == ("@relay:example.org",)
+
+
+# ===================================================================
 # origin_label field
 # ===================================================================
 
